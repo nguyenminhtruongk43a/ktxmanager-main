@@ -1,7 +1,7 @@
 'use client';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { CheckCircle2, XCircle, Clock, Loader2, Phone, CreditCard, Building2, Eye, X, AlertCircle, RefreshCw, ExternalLink, Download, Printer } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Loader2, Phone, CreditCard, Building2, Eye, X, AlertCircle, RefreshCw, ExternalLink, Download, Printer, Trash2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 interface WorkerRegistration {
@@ -21,6 +21,8 @@ interface WorkerRegistration {
   ktx: string;
   day: string;
   phong_so: string;
+  giuong: string;
+  ngay_vao_ktx: string;
   cccd_image_url: string | null;
   status: 'pending' | 'approved' | 'rejected';
   reviewed_by: string | null;
@@ -81,19 +83,19 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
               <p className="font-medium mt-0.5">{reg.ngay_sinh}</p>
             </div>}
             {reg.ho_khau_tinh && <div className="col-span-2">
-              <span className="text-xs text-muted-foreground">Quê quán / Hộ khẩu</span>
+              <span className="text-xs text-muted-foreground">Hộ khẩu Tỉnh/TP</span>
               <p className="font-medium mt-0.5">{reg.ho_khau_tinh}</p>
             </div>}
             {reg.don_vi && <div>
-              <span className="text-xs text-muted-foreground">Đơn vị / Nhà thầu</span>
+              <span className="text-xs text-muted-foreground">Đơn vị</span>
               <p className="font-medium mt-0.5">{reg.don_vi}</p>
             </div>}
             {reg.tieu_doan && <div>
-              <span className="text-xs text-muted-foreground">Tiểu đoàn</span>
+              <span className="text-xs text-muted-foreground">Tiểu đoàn / Trung đoàn</span>
               <p className="font-medium mt-0.5">{reg.tieu_doan}</p>
             </div>}
             {reg.to_truong && <div>
-              <span className="text-xs text-muted-foreground">Tổ trưởng phụ trách</span>
+              <span className="text-xs text-muted-foreground">Tổ trưởng</span>
               <p className="font-medium mt-0.5">{reg.to_truong}</p>
             </div>}
             {reg.sdt_to_truong && <div>
@@ -101,16 +103,24 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
               <p className="font-medium mt-0.5">{reg.sdt_to_truong}</p>
             </div>}
             {reg.ktx && <div>
-              <span className="text-xs text-muted-foreground">KTX</span>
+              <span className="text-xs text-muted-foreground">Khu KTX</span>
               <p className="font-medium mt-0.5">{reg.ktx}</p>
             </div>}
             {reg.day && <div>
-              <span className="text-xs text-muted-foreground">Dãy</span>
+              <span className="text-xs text-muted-foreground">Dãy nhà</span>
               <p className="font-medium mt-0.5">{reg.day}</p>
             </div>}
             {reg.phong_so && <div>
               <span className="text-xs text-muted-foreground">Phòng số</span>
               <p className="font-medium mt-0.5">{reg.phong_so}</p>
+            </div>}
+            {reg.giuong && <div>
+              <span className="text-xs text-muted-foreground">Số giường</span>
+              <p className="font-medium mt-0.5">{reg.giuong}</p>
+            </div>}
+            {reg.ngay_vao_ktx && <div>
+              <span className="text-xs text-muted-foreground">Ngày vào KTX</span>
+              <p className="font-medium mt-0.5">{reg.ngay_vao_ktx}</p>
             </div>}
             {reg.ghi_chu && <div className="col-span-2">
               <span className="text-xs text-muted-foreground">Ghi chú</span>
@@ -141,6 +151,43 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
               </button>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmModal({ name, onConfirm, onCancel, deleting }: {
+  name: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+            <Trash2 size={18} className="text-red-600" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground text-sm">Xóa hồ sơ</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Hành động này không thể hoàn tác.</p>
+          </div>
+        </div>
+        <p className="text-sm text-foreground">
+          Bạn có chắc muốn xóa hồ sơ của <strong>{name}</strong> khỏi danh sách?
+        </p>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={deleting}
+            className="flex-1 py-2 border border-border rounded-xl text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
+            Hủy
+          </button>
+          <button onClick={onConfirm} disabled={deleting}
+            className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors">
+            {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Xóa
+          </button>
         </div>
       </div>
     </div>
@@ -191,42 +238,25 @@ function QRCodeDisplay({ url }: { url: string }) {
       )}
       <div className="bg-gradient-to-br from-primary/5 to-blue-50 border border-primary/20 rounded-2xl p-5">
         <div className="flex flex-col lg:flex-row items-center gap-6">
-          {/* QR Code Image */}
           <div className="flex-shrink-0 flex flex-col items-center gap-3">
             <div className="bg-white rounded-2xl border-2 border-primary/20 p-3 shadow-lg">
-              <img
-                src={qrApiUrl}
-                alt="QR Code đăng ký cư trú KTX Hóc Môn"
-                width={200}
-                height={200}
-                className="w-48 h-48 rounded-lg"
-              />
+              <img src={qrApiUrl} alt="QR Code đăng ký cư trú KTX Hóc Môn" width={200} height={200} className="w-48 h-48 rounded-lg" />
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={handleDownload}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
-              >
-                <Download size={13} />
-                Tải xuống
+              <button onClick={handleDownload}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-90 transition-opacity shadow-sm">
+                <Download size={13} />Tải xuống
               </button>
-              <button
-                onClick={handlePrint}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-card text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors"
-              >
-                <Printer size={13} />
-                In ấn
+              <button onClick={handlePrint}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-card text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors">
+                <Printer size={13} />In ấn
               </button>
             </div>
           </div>
-
-          {/* Info */}
           <div className="flex-1 text-center lg:text-left space-y-3">
             <div>
               <h3 className="font-bold text-foreground text-lg">Mã QR Đăng Ký Cư Trú</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Dán mã QR này tại các khu vực KTX để công nhân quét và điền thông tin đăng ký trực tuyến.
-              </p>
+              <p className="text-sm text-muted-foreground mt-1">Dán mã QR này tại các khu vực KTX để công nhân quét và điền thông tin đăng ký trực tuyến.</p>
             </div>
             <div className="bg-white/80 rounded-xl border border-border p-3 space-y-2">
               <div className="flex items-center gap-2 flex-wrap">
@@ -258,6 +288,8 @@ export default function QRPortalClient() {
   const [detailReg, setDetailReg] = useState<WorkerRegistration | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [registerUrl, setRegisterUrl] = useState('/register');
+  const [deleteTarget, setDeleteTarget] = useState<WorkerRegistration | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const { currentUser } = useAuth();
   const supabase = createClient();
 
@@ -289,14 +321,51 @@ export default function QRPortalClient() {
   const handleApprove = async (id: string) => {
     setProcessing(id);
     try {
-      const { error } = await supabase
+      const reg = registrations.find(r => r.id === id);
+      if (!reg) return;
+
+      // 1. Update status in worker_registrations
+      const { error: updateErr } = await supabase
         .from('worker_registrations')
         .update({ status: 'approved', reviewed_by: currentUser?.id, reviewed_at: new Date().toISOString() })
         .eq('id', id);
-      if (!error) {
-        setRegistrations(prev => prev.map(r => r.id === id ? { ...r, status: 'approved' } : r));
-        if (detailReg?.id === id) setDetailReg(prev => prev ? { ...prev, status: 'approved' } : prev);
+
+      if (updateErr) throw new Error(updateErr.message);
+
+      // 2. Insert into workers table with ALL fields
+      const workerId = `reg-${id}`;
+      const { error: insertErr } = await supabase.from('workers').upsert({
+        id: workerId,
+        stt: 0,
+        ho_va_ten: reg.ho_va_ten || '',
+        ma_nv: reg.ma_nv || '',
+        tieu_doan: reg.tieu_doan || '',
+        ktx: reg.ktx || '',
+        don_vi: reg.don_vi || '',
+        gioi_tinh: reg.gioi_tinh || '',
+        ngay_sinh: reg.ngay_sinh || '',
+        so_dien_thoai: reg.so_dien_thoai || '',
+        day: reg.day || '',
+        phong_so: reg.phong_so || '',
+        giuong: reg.giuong || '',
+        cccd: reg.so_cccd || '',
+        ho_khau_tinh: reg.ho_khau_tinh || reg.que_quan || '',
+        to_truong: reg.to_truong || '',
+        sdt_to_truong: reg.sdt_to_truong || '',
+        ngay_vao_ktx: reg.ngay_vao_ktx || '',
+        ngay_ra_ktx: '',
+        ghi_chu: reg.ghi_chu || '',
+        khoa_tra_cuu: `${reg.day || ''}|${reg.phong_so || ''}|${reg.giuong || ''}`,
+        avatar: reg.cccd_image_url || '',
+        tam_tru_status: 'registered',
+      }, { onConflict: 'id' });
+
+      if (insertErr) {
+        console.warn('Insert to workers failed:', insertErr.message);
       }
+
+      setRegistrations(prev => prev.map(r => r.id === id ? { ...r, status: 'approved' } : r));
+      if (detailReg?.id === id) setDetailReg(prev => prev ? { ...prev, status: 'approved' } : prev);
     } catch (e: any) {
       console.error('Approve error:', e.message);
     } finally {
@@ -322,6 +391,26 @@ export default function QRPortalClient() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('worker_registrations')
+        .delete()
+        .eq('id', deleteTarget.id);
+      if (!error) {
+        setRegistrations(prev => prev.filter(r => r.id !== deleteTarget.id));
+        if (detailReg?.id === deleteTarget.id) setDetailReg(null);
+      }
+    } catch (e: any) {
+      console.error('Delete error:', e.message);
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  };
+
   const filtered = registrations.filter(r => filterStatus === 'all' || r.status === filterStatus);
   const counts = {
     pending: registrations.filter(r => r.status === 'pending').length,
@@ -333,6 +422,14 @@ export default function QRPortalClient() {
     <div className="p-4 md:p-6 space-y-5">
       {detailReg && (
         <DetailModal reg={detailReg} onClose={() => setDetailReg(null)} onApprove={handleApprove} onReject={handleReject} processing={processing} />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          name={deleteTarget.ho_va_ten}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+          deleting={deleting}
+        />
       )}
 
       {/* Header */}
@@ -395,6 +492,7 @@ export default function QRPortalClient() {
             {filtered.map(reg => {
               const cfg = STATUS_CONFIG[reg.status];
               const isProcessing = processing === reg.id;
+              const isDone = reg.status === 'approved' || reg.status === 'rejected';
               return (
                 <div key={reg.id} className="p-4 hover:bg-muted/30 transition-colors">
                   <div className="flex items-start gap-3">
@@ -413,7 +511,7 @@ export default function QRPortalClient() {
                         <span className="flex items-center gap-1"><CreditCard size={11} /> {reg.so_cccd}</span>
                         <span className="flex items-center gap-1"><Phone size={11} /> {reg.so_dien_thoai}</span>
                         {reg.don_vi && <span className="flex items-center gap-1"><Building2 size={11} /> {reg.don_vi}</span>}
-                        {reg.ktx && <span className="flex items-center gap-1"><Building2 size={11} /> {reg.ktx}{reg.day ? ` — ${reg.day}` : ''}{reg.phong_so ? ` P.${reg.phong_so}` : ''}</span>}
+                        {reg.ktx && <span className="flex items-center gap-1"><Building2 size={11} /> {reg.ktx}{reg.day ? ` — ${reg.day}` : ''}{reg.phong_so ? ` P.${reg.phong_so}` : ''}{reg.giuong ? ` G.${reg.giuong}` : ''}</span>}
                         <span>{new Date(reg.created_at).toLocaleDateString('vi-VN')}</span>
                       </div>
                     </div>
@@ -433,6 +531,12 @@ export default function QRPortalClient() {
                             {isProcessing ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                           </button>
                         </>
+                      )}
+                      {isDone && (
+                        <button onClick={() => setDeleteTarget(reg)}
+                          className="p-1.5 rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-600 transition-colors" title="Xóa hồ sơ">
+                          <Trash2 size={15} />
+                        </button>
                       )}
                     </div>
                   </div>

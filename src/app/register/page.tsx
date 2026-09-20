@@ -1,36 +1,47 @@
 'use client';
 import React, { useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Camera, Upload, CheckCircle2, AlertCircle, Loader2, User, CreditCard, Building2, X, QrCode } from 'lucide-react';
+import { Camera, Upload, CheckCircle2, AlertCircle, Loader2, User, CreditCard, X, QrCode, Home } from 'lucide-react';
 
 interface RegistrationForm {
   ma_nv: string;
   ho_va_ten: string;
-  so_cccd: string;
-  so_dien_thoai: string;
   gioi_tinh: string;
   ngay_sinh: string;
+  so_dien_thoai: string;
+  so_cccd: string;
   ho_khau_tinh: string;
-  don_vi: string;
-  tieu_doan: string;
-  to_truong: string;
-  sdt_to_truong: string;
+  // KTX info
   ktx: string;
-  ktx_custom: string;
+  tieu_doan: string;
   day: string;
   phong_so: string;
+  giuong: string;
+  don_vi: string;
+  ngay_vao_ktx: string;
+  // Team leader
+  to_truong: string;
+  sdt_to_truong: string;
+  // Extra
   ghi_chu: string;
 }
 
 const INITIAL_FORM: RegistrationForm = {
-  ma_nv: '', ho_va_ten: '', so_cccd: '', so_dien_thoai: '',
-  gioi_tinh: '', ngay_sinh: '', ho_khau_tinh: '',
-  don_vi: '', tieu_doan: '',
+  ma_nv: '', ho_va_ten: '', gioi_tinh: '', ngay_sinh: '',
+  so_dien_thoai: '', so_cccd: '', ho_khau_tinh: '',
+  ktx: '', tieu_doan: '', day: '', phong_so: '', giuong: '', don_vi: '', ngay_vao_ktx: '',
   to_truong: '', sdt_to_truong: '',
-  ktx: '', ktx_custom: '', day: '', phong_so: '', ghi_chu: '',
+  ghi_chu: '',
 };
 
-const KTX_OPTIONS = ['KTX 1', 'KTX 2', 'KTX 3', 'KTX 4', 'KTX 5', 'Khác...'];
+const PROVINCES = [
+  'An Giang','Bạc Liêu','Bến Tre','Bình Dương','Bình Phước','Bình Thuận',
+  'Cà Mau','Cần Thơ','Đà Nẵng','Đắk Lắk','Đồng Nai','Đồng Tháp',
+  'Gia Lai','Hải Phòng','Hậu Giang','Khánh Hòa','Kiên Giang','Lâm Đồng',
+  'Lạng Sơn','Long An','Nghệ An','Quảng Nam','Quảng Ngãi','Quảng Trị',
+  'Sóc Trăng','Tây Ninh','Tiền Giang','TP Hồ Chí Minh','Trà Vinh',
+  'Vĩnh Long','Thanh Hóa','Thừa Thiên Huế','Bình Định','Ninh Bình',
+];
 
 async function compressImage(file: File, maxKB = 300): Promise<File> {
   return new Promise((resolve) => {
@@ -67,6 +78,10 @@ async function compressImage(file: File, maxKB = 300): Promise<File> {
     img.src = url;
   });
 }
+
+const inputCls = 'w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30';
+const labelCls = 'text-xs text-muted-foreground mb-1 block';
+const sectionTitleCls = 'text-sm font-semibold text-foreground flex items-center gap-2 pt-1';
 
 export default function RegisterPage() {
   const [form, setForm] = useState<RegistrationForm>(INITIAL_FORM);
@@ -108,9 +123,6 @@ export default function RegisterPage() {
     if (file) handleImageFile(file);
   };
 
-  // Resolve final KTX value: if "Khác..." selected, use custom input
-  const resolvedKtx = form.ktx === 'Khác...' ? form.ktx_custom.trim() : form.ktx.trim();
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.ho_va_ten.trim() || !form.so_cccd.trim() || !form.so_dien_thoai.trim()) {
@@ -126,9 +138,7 @@ export default function RegisterPage() {
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('worker-avatars')
           .upload(`registrations/${fileName}`, cccdFile, { contentType: 'image/jpeg', upsert: true });
-        if (uploadErr) {
-          console.warn('Image upload failed, continuing without image:', uploadErr.message);
-        } else if (uploadData) {
+        if (!uploadErr && uploadData) {
           const { data: { publicUrl } } = supabase.storage.from('worker-avatars').getPublicUrl(uploadData.path);
           cccd_image_url = publicUrl;
         }
@@ -147,9 +157,11 @@ export default function RegisterPage() {
         tieu_doan: form.tieu_doan.trim(),
         to_truong: form.to_truong.trim(),
         sdt_to_truong: form.sdt_to_truong.trim(),
-        ktx: resolvedKtx,
+        ktx: form.ktx.trim(),
         day: form.day.trim(),
         phong_so: form.phong_so.trim(),
+        giuong: form.giuong.trim(),
+        ngay_vao_ktx: form.ngay_vao_ktx.trim(),
         ghi_chu: form.ghi_chu.trim(),
         cccd_image_url,
         status: 'pending',
@@ -179,7 +191,7 @@ export default function RegisterPage() {
             <div className="flex gap-2"><span className="text-muted-foreground w-28">Họ tên:</span><span className="font-medium">{form.ho_va_ten}</span></div>
             <div className="flex gap-2"><span className="text-muted-foreground w-28">CCCD:</span><span className="font-medium">{form.so_cccd}</span></div>
             <div className="flex gap-2"><span className="text-muted-foreground w-28">SĐT:</span><span className="font-medium">{form.so_dien_thoai}</span></div>
-            {resolvedKtx && <div className="flex gap-2"><span className="text-muted-foreground w-28">KTX:</span><span className="font-medium">{resolvedKtx}</span></div>}
+            {form.ktx && <div className="flex gap-2"><span className="text-muted-foreground w-28">KTX:</span><span className="font-medium">{form.ktx}</span></div>}
           </div>
           <button onClick={() => { setSubmitted(false); setForm(INITIAL_FORM); setCccdFile(null); setCccdPreview(null); setFileSizeKB(null); }}
             className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl font-medium hover:opacity-90 transition-opacity text-sm">
@@ -204,147 +216,168 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg border border-border p-6 space-y-5">
 
-          {/* Section 1: Thông tin nhân viên */}
+          {/* ── SECTION 1: Thông tin cá nhân ── */}
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <User size={15} className="text-primary" /> Thông tin nhân viên
+            <h3 className={sectionTitleCls}>
+              <User size={15} className="text-primary" /> Thông tin cá nhân
             </h3>
+
+            {/* Row: Mã NV + Giới tính */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Mã nhân viên</label>
+                <label className={labelCls}>Mã nhân viên</label>
                 <input type="text" value={form.ma_nv} onChange={handleField('ma_nv')}
-                  placeholder="NV001"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  placeholder="NV001 hoặc để trống"
+                  className={inputCls} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Giới tính</label>
-                <select value={form.gioi_tinh} onChange={handleField('gioi_tinh')}
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30">
+                <label className={labelCls}>Giới tính</label>
+                <select value={form.gioi_tinh} onChange={handleField('gioi_tinh')} className={inputCls}>
                   <option value="">Chọn</option>
                   <option value="Nam">Nam</option>
                   <option value="Nữ">Nữ</option>
                 </select>
               </div>
             </div>
+
+            {/* Họ và tên */}
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Họ và tên <span className="text-red-500">*</span></label>
+              <label className={labelCls}>Họ và tên <span className="text-red-500">*</span></label>
               <input type="text" value={form.ho_va_ten} onChange={handleField('ho_va_ten')} required
                 placeholder="Nguyễn Văn A"
-                className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                className={inputCls} />
             </div>
+
+            {/* Row: Ngày sinh + Số điện thoại */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Số CCCD <span className="text-red-500">*</span></label>
-                <input type="text" value={form.so_cccd} onChange={handleField('so_cccd')} required
-                  placeholder="012345678901"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                <label className={labelCls}>Ngày sinh</label>
+                <input type="text" value={form.ngay_sinh} onChange={handleField('ngay_sinh')}
+                  placeholder="VD: 15/06/1990"
+                  className={inputCls} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Số điện thoại <span className="text-red-500">*</span></label>
+                <label className={labelCls}>Số điện thoại <span className="text-red-500">*</span></label>
                 <input type="tel" value={form.so_dien_thoai} onChange={handleField('so_dien_thoai')} required
                   placeholder="0901234567"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  className={inputCls} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Ngày sinh</label>
-                <input type="date" value={form.ngay_sinh} onChange={handleField('ngay_sinh')}
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Quê quán / Hộ khẩu</label>
-                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')}
-                  placeholder="Tỉnh/TP"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
+
+            {/* Số CCCD */}
+            <div>
+              <label className={labelCls}>Số CCCD <span className="text-red-500">*</span></label>
+              <input type="text" value={form.so_cccd} onChange={handleField('so_cccd')} required
+                placeholder="012345678901"
+                className={inputCls} />
+            </div>
+
+            {/* Hộ khẩu Tỉnh/TP */}
+            <div>
+              <label className={labelCls}>Hộ khẩu Tỉnh/TP</label>
+              <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')}
+                placeholder="VD: An Giang"
+                list="province-list"
+                className={inputCls} />
+              <datalist id="province-list">
+                {PROVINCES.map(p => <option key={p} value={p} />)}
+              </datalist>
             </div>
           </div>
 
-          {/* Section 2: Đơn vị công tác */}
+          {/* ── SECTION 2: Thông tin KTX ── */}
           <div className="space-y-3 pt-1 border-t border-border">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
-              <Building2 size={15} className="text-primary" /> Đơn vị công tác
+            <h3 className={sectionTitleCls}>
+              <Home size={15} className="text-primary" /> Thông tin KTX
             </h3>
+
+            {/* Row: Khu KTX + Tiểu đoàn / Trung đoàn */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Đơn vị / Nhà thầu</label>
-                <input type="text" value={form.don_vi} onChange={handleField('don_vi')}
-                  placeholder="Công ty ABC"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                <label className={labelCls}>Khu KTX</label>
+                <input type="text" value={form.ktx} onChange={handleField('ktx')}
+                  placeholder="VD: KTX 1, KTX 2..."
+                  list="ktx-list"
+                  className={inputCls} />
+                <datalist id="ktx-list">
+                  <option value="KTX 1" />
+                  <option value="KTX 2" />
+                  <option value="KTX 3" />
+                  <option value="KTX 4" />
+                  <option value="KTX 5" />
+                </datalist>
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Tiểu đoàn</label>
+                <label className={labelCls}>Tiểu đoàn / Trung đoàn</label>
                 <input type="text" value={form.tieu_doan} onChange={handleField('tieu_doan')}
-                  placeholder="TD1"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  placeholder="VD: 8, 111, 113..."
+                  className={inputCls} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Tổ trưởng phụ trách</label>
-                <input type="text" value={form.to_truong} onChange={handleField('to_truong')}
-                  placeholder="Nguyễn Văn B"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">SĐT tổ trưởng</label>
-                <input type="tel" value={form.sdt_to_truong} onChange={handleField('sdt_to_truong')}
-                  placeholder="0901234567"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
-            </div>
-          </div>
 
-          {/* Section 3: Thông tin phòng ở */}
-          <div className="space-y-3 pt-1 border-t border-border">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
-              <Building2 size={15} className="text-primary" /> Thông tin phòng ở
-            </h3>
+            {/* Row: Dãy nhà + Phòng số + Số giường */}
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Khu KTX</label>
-                <select value={form.ktx} onChange={handleField('ktx')}
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30">
-                  <option value="">Chọn</option>
-                  {KTX_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Dãy</label>
+                <label className={labelCls}>Dãy nhà</label>
                 <input type="text" value={form.day} onChange={handleField('day')}
-                  placeholder="Dãy A"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  placeholder="Dãy 3"
+                  className={inputCls} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Phòng số</label>
+                <label className={labelCls}>Phòng số</label>
                 <input type="text" value={form.phong_so} onChange={handleField('phong_so')}
                   placeholder="101"
-                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Số giường</label>
+                <input type="text" value={form.giuong} onChange={handleField('giuong')}
+                  placeholder="1–20"
+                  className={inputCls} />
               </div>
             </div>
-            {/* Custom KTX input when "Khác..." is selected */}
-            {form.ktx === 'Khác...' && (
+
+            {/* Row: Đơn vị + Ngày vào KTX */}
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Nhập tên KTX <span className="text-red-500">*</span></label>
-                <input type="text" value={form.ktx_custom} onChange={handleField('ktx_custom')}
-                  placeholder="VD: KTX 6, KTX Mới..."
-                  className="w-full px-3 py-2.5 text-sm border border-primary/40 rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                <label className={labelCls}>Đơn vị</label>
+                <input type="text" value={form.don_vi} onChange={handleField('don_vi')}
+                  placeholder="VD: XD, ME..."
+                  className={inputCls} />
               </div>
-            )}
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Ghi chú</label>
-              <textarea value={form.ghi_chu} onChange={handleField('ghi_chu')} rows={2}
-                placeholder="Thông tin thêm (nếu có)..."
-                className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none" />
+              <div>
+                <label className={labelCls}>Ngày vào KTX</label>
+                <input type="text" value={form.ngay_vao_ktx} onChange={handleField('ngay_vao_ktx')}
+                  placeholder="VD: 01/09/2026"
+                  className={inputCls} />
+              </div>
             </div>
           </div>
 
-          {/* Section 4: Ảnh CCCD */}
+          {/* ── SECTION 3: Thông tin tổ trưởng ── */}
           <div className="space-y-3 pt-1 border-t border-border">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
+            <h3 className={sectionTitleCls}>
+              <User size={15} className="text-primary" /> Thông tin tổ trưởng
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelCls}>Họ tên tổ trưởng</label>
+                <input type="text" value={form.to_truong} onChange={handleField('to_truong')}
+                  placeholder="Nguyễn Văn B"
+                  className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>SĐT tổ trưởng</label>
+                <input type="tel" value={form.sdt_to_truong} onChange={handleField('sdt_to_truong')}
+                  placeholder="0901234567"
+                  className={inputCls} />
+              </div>
+            </div>
+          </div>
+
+          {/* ── SECTION 4: Ảnh CCCD ── */}
+          <div className="space-y-3 pt-1 border-t border-border">
+            <h3 className={sectionTitleCls}>
               <CreditCard size={15} className="text-primary" /> Ảnh CCCD
               <span className="text-xs font-normal text-muted-foreground">(tự động nén &lt;300KB)</span>
             </h3>
@@ -377,6 +410,14 @@ export default function RegisterPage() {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Ghi chú */}
+          <div className="pt-1 border-t border-border">
+            <label className={labelCls}>Ghi chú (nếu có)</label>
+            <textarea value={form.ghi_chu} onChange={handleField('ghi_chu')} rows={2}
+              placeholder="Thông tin thêm..."
+              className={`${inputCls} resize-none`} />
           </div>
 
           {/* Error */}
