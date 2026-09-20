@@ -103,11 +103,11 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
   const jsonData: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   if (!jsonData || jsonData.length < 2) return [];
 
-  // Find header row (first row with recognizable column names)
-  let headerRowIdx = 0;
+  // Find header row (search in first 8 rows to handle files with title/metadata rows)
+  let headerRowIdx = -1;
   let headerMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
 
-  for (let i = 0; i < Math.min(5, jsonData.length); i++) {
+  for (let i = 0; i < Math.min(8, jsonData.length); i++) {
     const row = jsonData[i];
     const tempMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
     let matchCount = 0;
@@ -125,11 +125,15 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
     }
   }
 
-  if (Object.keys(headerMap).length === 0) return [];
+  if (headerRowIdx === -1 || Object.keys(headerMap).length === 0) return [];
+
+  // Data starts from row 6 (index 5) per file format requirement.
+  // If the header row is found before index 5, still start data from index 5.
+  const dataStartIdx = Math.max(headerRowIdx + 1, 5);
 
   const results: Omit<FacilityRow, 'id'>[] = [];
 
-  for (let i = headerRowIdx + 1; i < jsonData.length; i++) {
+  for (let i = dataStartIdx; i < jsonData.length; i++) {
     const row = jsonData[i];
     if (!row || row.every((c: any) => !c && c !== 0)) continue; // skip empty rows
 
@@ -232,12 +236,26 @@ export default function FacilitiesClient() {
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
       const KTX_SHEET_NAMES: Record<string, string> = {
+        // KTX 1 variants
         'ktx 1': 'KTX 1',
         'ktx1': 'KTX 1',
         'ký túc xá 1': 'KTX 1',
+        'ky tuc xa 1': 'KTX 1',
+        'kỹ túc xá 1': 'KTX 1',
+        'ký tuc xá 1': 'KTX 1',
+        'ky túc xá 1': 'KTX 1',
+        'ký túc xa 1': 'KTX 1',
+        'ktx1 ': 'KTX 1',
+        // KTX 2 variants
         'ktx 2': 'KTX 2',
         'ktx2': 'KTX 2',
         'ký túc xá 2': 'KTX 2',
+        'ky tuc xa 2': 'KTX 2',
+        'kỹ túc xá 2': 'KTX 2',
+        'ký tuc xá 2': 'KTX 2',
+        'ky túc xá 2': 'KTX 2',
+        'ký túc xa 2': 'KTX 2',
+        'ktx2 ': 'KTX 2',
       };
 
       let allParsedRows: Omit<FacilityRow, 'id'>[] = [];
