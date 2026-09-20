@@ -4,21 +4,33 @@ import { createClient } from '@/lib/supabase/client';
 import { Camera, Upload, CheckCircle2, AlertCircle, Loader2, User, CreditCard, Building2, X, QrCode } from 'lucide-react';
 
 interface RegistrationForm {
+  ma_nv: string;
   ho_va_ten: string;
   so_cccd: string;
   so_dien_thoai: string;
+  gioi_tinh: string;
   ngay_sinh: string;
-  que_quan: string;
+  ho_khau_tinh: string;
+  don_vi: string;
+  tieu_doan: string;
+  to_truong: string;
+  sdt_to_truong: string;
   ktx: string;
+  ktx_custom: string;
   day: string;
   phong_so: string;
   ghi_chu: string;
 }
 
 const INITIAL_FORM: RegistrationForm = {
-  ho_va_ten: '', so_cccd: '', so_dien_thoai: '', ngay_sinh: '',
-  que_quan: '', ktx: '', day: '', phong_so: '', ghi_chu: '',
+  ma_nv: '', ho_va_ten: '', so_cccd: '', so_dien_thoai: '',
+  gioi_tinh: '', ngay_sinh: '', ho_khau_tinh: '',
+  don_vi: '', tieu_doan: '',
+  to_truong: '', sdt_to_truong: '',
+  ktx: '', ktx_custom: '', day: '', phong_so: '', ghi_chu: '',
 };
+
+const KTX_OPTIONS = ['KTX 1', 'KTX 2', 'KTX 3', 'KTX 4', 'KTX 5', 'Khác...'];
 
 async function compressImage(file: File, maxKB = 300): Promise<File> {
   return new Promise((resolve) => {
@@ -37,7 +49,6 @@ async function compressImage(file: File, maxKB = 300): Promise<File> {
       canvas.height = height;
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0, width, height);
-
       let quality = 0.85;
       const tryCompress = () => {
         canvas.toBlob((blob) => {
@@ -97,6 +108,9 @@ export default function RegisterPage() {
     if (file) handleImageFile(file);
   };
 
+  // Resolve final KTX value: if "Khác..." selected, use custom input
+  const resolvedKtx = form.ktx === 'Khác...' ? form.ktx_custom.trim() : form.ktx.trim();
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.ho_va_ten.trim() || !form.so_cccd.trim() || !form.so_dien_thoai.trim()) {
@@ -107,7 +121,6 @@ export default function RegisterPage() {
     setError(null);
     try {
       let cccd_image_url: string | null = null;
-
       if (cccdFile) {
         const fileName = `cccd_${Date.now()}_${form.so_cccd}.jpg`;
         const { data: uploadData, error: uploadErr } = await supabase.storage
@@ -122,12 +135,19 @@ export default function RegisterPage() {
       }
 
       const { error: insertErr } = await supabase.from('worker_registrations').insert({
+        ma_nv: form.ma_nv.trim(),
         ho_va_ten: form.ho_va_ten.trim(),
         so_cccd: form.so_cccd.trim(),
         so_dien_thoai: form.so_dien_thoai.trim(),
+        gioi_tinh: form.gioi_tinh.trim(),
         ngay_sinh: form.ngay_sinh.trim(),
-        que_quan: form.que_quan.trim(),
-        ktx: form.ktx.trim(),
+        ho_khau_tinh: form.ho_khau_tinh.trim(),
+        que_quan: form.ho_khau_tinh.trim(),
+        don_vi: form.don_vi.trim(),
+        tieu_doan: form.tieu_doan.trim(),
+        to_truong: form.to_truong.trim(),
+        sdt_to_truong: form.sdt_to_truong.trim(),
+        ktx: resolvedKtx,
         day: form.day.trim(),
         phong_so: form.phong_so.trim(),
         ghi_chu: form.ghi_chu.trim(),
@@ -156,10 +176,10 @@ export default function RegisterPage() {
             Hồ sơ của bạn đã được gửi đến Ban quản lý KTX Hóc Môn. Vui lòng chờ xét duyệt trong vòng <strong>1–2 ngày làm việc</strong>.
           </p>
           <div className="bg-muted/50 rounded-xl p-4 text-left space-y-1.5 text-sm">
-            <div className="flex gap-2"><span className="text-muted-foreground w-24">Họ tên:</span><span className="font-medium">{form.ho_va_ten}</span></div>
-            <div className="flex gap-2"><span className="text-muted-foreground w-24">CCCD:</span><span className="font-medium">{form.so_cccd}</span></div>
-            <div className="flex gap-2"><span className="text-muted-foreground w-24">SĐT:</span><span className="font-medium">{form.so_dien_thoai}</span></div>
-            {form.ktx && <div className="flex gap-2"><span className="text-muted-foreground w-24">KTX:</span><span className="font-medium">{form.ktx}</span></div>}
+            <div className="flex gap-2"><span className="text-muted-foreground w-28">Họ tên:</span><span className="font-medium">{form.ho_va_ten}</span></div>
+            <div className="flex gap-2"><span className="text-muted-foreground w-28">CCCD:</span><span className="font-medium">{form.so_cccd}</span></div>
+            <div className="flex gap-2"><span className="text-muted-foreground w-28">SĐT:</span><span className="font-medium">{form.so_dien_thoai}</span></div>
+            {resolvedKtx && <div className="flex gap-2"><span className="text-muted-foreground w-28">KTX:</span><span className="font-medium">{resolvedKtx}</span></div>}
           </div>
           <button onClick={() => { setSubmitted(false); setForm(INITIAL_FORM); setCccdFile(null); setCccdPreview(null); setFileSizeKB(null); }}
             className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl font-medium hover:opacity-90 transition-opacity text-sm">
@@ -183,11 +203,29 @@ export default function RegisterPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg border border-border p-6 space-y-5">
-          {/* Personal Info */}
+
+          {/* Section 1: Thông tin nhân viên */}
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <User size={15} className="text-primary" /> Thông tin cá nhân
+              <User size={15} className="text-primary" /> Thông tin nhân viên
             </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Mã nhân viên</label>
+                <input type="text" value={form.ma_nv} onChange={handleField('ma_nv')}
+                  placeholder="NV001"
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Giới tính</label>
+                <select value={form.gioi_tinh} onChange={handleField('gioi_tinh')}
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30">
+                  <option value="">Chọn</option>
+                  <option value="Nam">Nam</option>
+                  <option value="Nữ">Nữ</option>
+                </select>
+              </div>
+            </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Họ và tên <span className="text-red-500">*</span></label>
               <input type="text" value={form.ho_va_ten} onChange={handleField('ho_va_ten')} required
@@ -215,27 +253,63 @@ export default function RegisterPage() {
                   className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Quê quán</label>
-                <input type="text" value={form.que_quan} onChange={handleField('que_quan')}
+                <label className="text-xs text-muted-foreground mb-1 block">Quê quán / Hộ khẩu</label>
+                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')}
                   placeholder="Tỉnh/TP"
                   className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
             </div>
           </div>
 
-          {/* Room Info */}
+          {/* Section 2: Đơn vị công tác */}
+          <div className="space-y-3 pt-1 border-t border-border">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
+              <Building2 size={15} className="text-primary" /> Đơn vị công tác
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Đơn vị / Nhà thầu</label>
+                <input type="text" value={form.don_vi} onChange={handleField('don_vi')}
+                  placeholder="Công ty ABC"
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Tiểu đoàn</label>
+                <input type="text" value={form.tieu_doan} onChange={handleField('tieu_doan')}
+                  placeholder="TD1"
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Tổ trưởng phụ trách</label>
+                <input type="text" value={form.to_truong} onChange={handleField('to_truong')}
+                  placeholder="Nguyễn Văn B"
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">SĐT tổ trưởng</label>
+                <input type="tel" value={form.sdt_to_truong} onChange={handleField('sdt_to_truong')}
+                  placeholder="0901234567"
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Thông tin phòng ở */}
           <div className="space-y-3 pt-1 border-t border-border">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
               <Building2 size={15} className="text-primary" /> Thông tin phòng ở
             </h3>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">KTX</label>
+                <label className="text-xs text-muted-foreground mb-1 block">Khu KTX</label>
                 <select value={form.ktx} onChange={handleField('ktx')}
                   className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30">
                   <option value="">Chọn</option>
-                  <option value="KTX 1">KTX 1</option>
-                  <option value="KTX 2">KTX 2</option>
+                  {KTX_OPTIONS.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -251,6 +325,15 @@ export default function RegisterPage() {
                   className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
             </div>
+            {/* Custom KTX input when "Khác..." is selected */}
+            {form.ktx === 'Khác...' && (
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Nhập tên KTX <span className="text-red-500">*</span></label>
+                <input type="text" value={form.ktx_custom} onChange={handleField('ktx_custom')}
+                  placeholder="VD: KTX 6, KTX Mới..."
+                  className="w-full px-3 py-2.5 text-sm border border-primary/40 rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              </div>
+            )}
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ghi chú</label>
               <textarea value={form.ghi_chu} onChange={handleField('ghi_chu')} rows={2}
@@ -259,7 +342,7 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* CCCD Photo */}
+          {/* Section 4: Ảnh CCCD */}
           <div className="space-y-3 pt-1 border-t border-border">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2 pt-1">
               <CreditCard size={15} className="text-primary" /> Ảnh CCCD

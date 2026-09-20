@@ -1,17 +1,23 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-
-import { CheckCircle2, XCircle, Clock, Loader2, Phone, CreditCard, Building2, Eye, X, AlertCircle, RefreshCw, QrCode, ExternalLink } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Loader2, Phone, CreditCard, Building2, Eye, X, AlertCircle, RefreshCw, ExternalLink, Download, Printer } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 interface WorkerRegistration {
   id: string;
   ho_va_ten: string;
+  ma_nv: string;
   so_cccd: string;
   so_dien_thoai: string;
   ngay_sinh: string;
   que_quan: string;
+  gioi_tinh: string;
+  don_vi: string;
+  tieu_doan: string;
+  to_truong: string;
+  sdt_to_truong: string;
+  ho_khau_tinh: string;
   ktx: string;
   day: string;
   phong_so: string;
@@ -46,17 +52,18 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
-          {/* Status */}
           <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border ${cfg.color}`}>
             {cfg.icon} {cfg.label}
           </div>
-
-          {/* Info grid */}
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="col-span-2">
               <span className="text-xs text-muted-foreground">Họ và tên</span>
               <p className="font-semibold text-foreground mt-0.5">{reg.ho_va_ten}</p>
             </div>
+            {reg.ma_nv && <div>
+              <span className="text-xs text-muted-foreground">Mã nhân viên</span>
+              <p className="font-medium mt-0.5">{reg.ma_nv}</p>
+            </div>}
             <div>
               <span className="text-xs text-muted-foreground">Số CCCD</span>
               <p className="font-medium mt-0.5">{reg.so_cccd}</p>
@@ -65,13 +72,33 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
               <span className="text-xs text-muted-foreground">Số điện thoại</span>
               <p className="font-medium mt-0.5">{reg.so_dien_thoai}</p>
             </div>
+            {reg.gioi_tinh && <div>
+              <span className="text-xs text-muted-foreground">Giới tính</span>
+              <p className="font-medium mt-0.5">{reg.gioi_tinh}</p>
+            </div>}
             {reg.ngay_sinh && <div>
               <span className="text-xs text-muted-foreground">Ngày sinh</span>
               <p className="font-medium mt-0.5">{reg.ngay_sinh}</p>
             </div>}
-            {reg.que_quan && <div>
-              <span className="text-xs text-muted-foreground">Quê quán</span>
-              <p className="font-medium mt-0.5">{reg.que_quan}</p>
+            {reg.ho_khau_tinh && <div className="col-span-2">
+              <span className="text-xs text-muted-foreground">Quê quán / Hộ khẩu</span>
+              <p className="font-medium mt-0.5">{reg.ho_khau_tinh}</p>
+            </div>}
+            {reg.don_vi && <div>
+              <span className="text-xs text-muted-foreground">Đơn vị / Nhà thầu</span>
+              <p className="font-medium mt-0.5">{reg.don_vi}</p>
+            </div>}
+            {reg.tieu_doan && <div>
+              <span className="text-xs text-muted-foreground">Tiểu đoàn</span>
+              <p className="font-medium mt-0.5">{reg.tieu_doan}</p>
+            </div>}
+            {reg.to_truong && <div>
+              <span className="text-xs text-muted-foreground">Tổ trưởng phụ trách</span>
+              <p className="font-medium mt-0.5">{reg.to_truong}</p>
+            </div>}
+            {reg.sdt_to_truong && <div>
+              <span className="text-xs text-muted-foreground">SĐT tổ trưởng</span>
+              <p className="font-medium mt-0.5">{reg.sdt_to_truong}</p>
             </div>}
             {reg.ktx && <div>
               <span className="text-xs text-muted-foreground">KTX</span>
@@ -94,16 +121,12 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
               <p className="font-medium mt-0.5">{new Date(reg.created_at).toLocaleString('vi-VN')}</p>
             </div>
           </div>
-
-          {/* CCCD Image */}
           {reg.cccd_image_url && (
             <div>
               <span className="text-xs text-muted-foreground block mb-2">Ảnh CCCD</span>
               <img src={reg.cccd_image_url} alt={`Ảnh CCCD của ${reg.ho_va_ten}`} className="w-full rounded-xl border border-border object-cover max-h-48" />
             </div>
           )}
-
-          {/* Actions */}
           {reg.status === 'pending' && (
             <div className="flex gap-3 pt-2 border-t border-border">
               <button onClick={() => onReject(reg.id)} disabled={isProcessing}
@@ -124,6 +147,109 @@ function DetailModal({ reg, onClose, onApprove, onReject, processing }: {
   );
 }
 
+function QRCodeDisplay({ url }: { url: string }) {
+  const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}&margin=10&color=1a1a2e&bgcolor=ffffff`;
+  const qrLargeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(url)}&margin=20&color=1a1a2e&bgcolor=ffffff`;
+  const [showPrintView, setShowPrintView] = useState(false);
+
+  const handleDownload = async () => {
+    try {
+      const response = await fetch(qrLargeUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'qr-dang-ky-cu-tru.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(qrLargeUrl, '_blank');
+    }
+  };
+
+  const handlePrint = () => {
+    setShowPrintView(true);
+    setTimeout(() => {
+      window.print();
+      setShowPrintView(false);
+    }, 300);
+  };
+
+  return (
+    <>
+      {showPrintView && (
+        <div className="fixed inset-0 z-[9999] bg-white flex flex-col items-center justify-center p-8 print:block" id="print-area">
+          <div className="text-center space-y-4">
+            <h2 className="text-2xl font-bold text-gray-900">Đăng Ký Cư Trú KTX Hóc Môn</h2>
+            <p className="text-gray-600">Quét mã QR để đăng ký</p>
+            <img src={qrLargeUrl} alt="QR Code đăng ký cư trú" className="w-64 h-64 mx-auto border-4 border-gray-200 rounded-xl" />
+            <p className="text-sm text-gray-500 font-mono break-all max-w-xs mx-auto">{url}</p>
+          </div>
+        </div>
+      )}
+      <div className="bg-gradient-to-br from-primary/5 to-blue-50 border border-primary/20 rounded-2xl p-5">
+        <div className="flex flex-col lg:flex-row items-center gap-6">
+          {/* QR Code Image */}
+          <div className="flex-shrink-0 flex flex-col items-center gap-3">
+            <div className="bg-white rounded-2xl border-2 border-primary/20 p-3 shadow-lg">
+              <img
+                src={qrApiUrl}
+                alt="QR Code đăng ký cư trú KTX Hóc Môn"
+                width={200}
+                height={200}
+                className="w-48 h-48 rounded-lg"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDownload}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
+              >
+                <Download size={13} />
+                Tải xuống
+              </button>
+              <button
+                onClick={handlePrint}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-card text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors"
+              >
+                <Printer size={13} />
+                In ấn
+              </button>
+            </div>
+          </div>
+
+          {/* Info */}
+          <div className="flex-1 text-center lg:text-left space-y-3">
+            <div>
+              <h3 className="font-bold text-foreground text-lg">Mã QR Đăng Ký Cư Trú</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                Dán mã QR này tại các khu vực KTX để công nhân quét và điền thông tin đăng ký trực tuyến.
+              </p>
+            </div>
+            <div className="bg-white/80 rounded-xl border border-border p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-muted-foreground">Đường dẫn:</span>
+                <code className="text-xs bg-muted px-2 py-0.5 rounded font-mono text-foreground break-all">{url}</code>
+              </div>
+              <a href="/register" target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline font-medium">
+                <ExternalLink size={12} /> Mở trang đăng ký để kiểm tra
+              </a>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-1 rounded-full border border-emerald-200">✓ Hỗ trợ mọi điện thoại</span>
+              <span className="flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-1 rounded-full border border-blue-200">✓ Không cần cài app</span>
+              <span className="flex items-center gap-1 bg-purple-50 text-purple-700 px-2 py-1 rounded-full border border-purple-200">✓ Tự động lưu hồ sơ</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function QRPortalClient() {
   const [registrations, setRegistrations] = useState<WorkerRegistration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,8 +257,15 @@ export default function QRPortalClient() {
   const [processing, setProcessing] = useState<string | null>(null);
   const [detailReg, setDetailReg] = useState<WorkerRegistration | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [registerUrl, setRegisterUrl] = useState('/register');
   const { currentUser } = useAuth();
   const supabase = createClient();
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setRegisterUrl(`${window.location.origin}/register`);
+    }
+  }, []);
 
   const fetchRegistrations = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -190,8 +323,11 @@ export default function QRPortalClient() {
   };
 
   const filtered = registrations.filter(r => filterStatus === 'all' || r.status === filterStatus);
-  const counts = { pending: registrations.filter(r => r.status === 'pending').length, approved: registrations.filter(r => r.status === 'approved').length, rejected: registrations.filter(r => r.status === 'rejected').length };
-  const registerUrl = typeof window !== 'undefined' ? `${window.location.origin}/register` : '/register';
+  const counts = {
+    pending: registrations.filter(r => r.status === 'pending').length,
+    approved: registrations.filter(r => r.status === 'approved').length,
+    rejected: registrations.filter(r => r.status === 'rejected').length,
+  };
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -212,23 +348,8 @@ export default function QRPortalClient() {
         </button>
       </div>
 
-      {/* QR Code Card */}
-      <div className="bg-gradient-to-r from-primary/10 to-blue-50 border border-primary/20 rounded-2xl p-5 flex flex-col sm:flex-row items-center gap-5">
-        <div className="w-24 h-24 bg-white rounded-xl border-2 border-primary/30 flex items-center justify-center flex-shrink-0 shadow-sm">
-          <QrCode size={48} className="text-primary" />
-        </div>
-        <div className="flex-1 text-center sm:text-left space-y-2">
-          <h3 className="font-semibold text-foreground">Mã QR Đăng Ký Cư Trú</h3>
-          <p className="text-sm text-muted-foreground">Công nhân quét mã QR để truy cập trang đăng ký trực tuyến</p>
-          <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
-            <code className="text-xs bg-white border border-border px-2 py-1 rounded-lg text-foreground font-mono">{registerUrl}</code>
-            <a href="/register" target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1 text-xs text-primary hover:underline font-medium">
-              <ExternalLink size={12} /> Mở trang đăng ký
-            </a>
-          </div>
-        </div>
-      </div>
+      {/* QR Code Display */}
+      <QRCodeDisplay url={registerUrl} />
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
@@ -283,6 +404,7 @@ export default function QRPortalClient() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold text-foreground text-sm">{reg.ho_va_ten}</span>
+                        {reg.ma_nv && <span className="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{reg.ma_nv}</span>}
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${cfg.color}`}>
                           {cfg.icon} {cfg.label}
                         </span>
@@ -290,6 +412,7 @@ export default function QRPortalClient() {
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1"><CreditCard size={11} /> {reg.so_cccd}</span>
                         <span className="flex items-center gap-1"><Phone size={11} /> {reg.so_dien_thoai}</span>
+                        {reg.don_vi && <span className="flex items-center gap-1"><Building2 size={11} /> {reg.don_vi}</span>}
                         {reg.ktx && <span className="flex items-center gap-1"><Building2 size={11} /> {reg.ktx}{reg.day ? ` — ${reg.day}` : ''}{reg.phong_so ? ` P.${reg.phong_so}` : ''}</span>}
                         <span>{new Date(reg.created_at).toLocaleDateString('vi-VN')}</span>
                       </div>
