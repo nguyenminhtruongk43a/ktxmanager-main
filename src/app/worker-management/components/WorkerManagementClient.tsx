@@ -1039,7 +1039,8 @@ export default function WorkerManagementClient() {
     const s = filters.search.toLowerCase();
     if (s) list = list.filter(w =>
       w.hoVaTen.toLowerCase().includes(s) || w.maNV.toLowerCase().includes(s) ||
-      w.cccd.toLowerCase().includes(s) || w.soDienThoai.includes(s)
+      w.cccd.toLowerCase().includes(s) || w.soDienThoai.includes(s) ||
+      (w.toTruong || '').toLowerCase().includes(s)
     );
     if (filters.ktx) list = list.filter(w => w.ktx === filters.ktx);
     if (filters.building) list = list.filter(w => w.day === filters.building);
@@ -1222,7 +1223,7 @@ export default function WorkerManagementClient() {
         'KTX': w.ktx,
         'Dãy': w.day,
         'Phòng': w.phongSo,
-        'Giường': w.giuong || '',
+        'Giới tính': w.gioiTinh || '',
         'SĐT': w.soDienThoai,
         'CCCD': w.cccd,
         'Ngày Tháng Năm Sinh': formatNgaySinh(w.ngaySinh),

@@ -1,8 +1,9 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { Worker, calcSoNgay } from '@/data/workers';
-import { X, Loader2, Save } from 'lucide-react';
+import { X, Loader2, Save, Camera, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 
 interface Props {
   worker: Worker | null;
@@ -22,8 +23,54 @@ const PROVINCES = [
   'Vĩnh Long','Thanh Hóa','Thừa Thiên Huế','Bình Định','Ninh Bình',
 ];
 
+/** Compress an image File to under maxSizeKB using canvas */
+async function compressImage(file: File, maxSizeKB = 300): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+
+      // Scale down if too large
+      const MAX_DIM = 1200;
+      if (width > MAX_DIM || height > MAX_DIM) {
+        if (width > height) { height = Math.round((height * MAX_DIM) / width); width = MAX_DIM; }
+        else { width = Math.round((width * MAX_DIM) / height); height = MAX_DIM; }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('Canvas not supported')); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Try decreasing quality until under maxSizeKB
+      let quality = 0.85;
+      const tryCompress = () => {
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Compression failed')); return; }
+          if (blob.size <= maxSizeKB * 1024 || quality <= 0.1) {
+            resolve(blob);
+          } else {
+            quality -= 0.1;
+            tryCompress();
+          }
+        }, 'image/jpeg', quality);
+      };
+      tryCompress();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image load failed')); };
+    img.src = url;
+  });
+}
+
 export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = [] }: Props) {
   const [saving, setSaving] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string>(worker?.avatar || '');
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isEdit = !!worker;
 
   // Dynamic options from existing data
@@ -40,12 +87,54 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
       giuong: worker.giuong, cccd: worker.cccd, hoKhauTinh: worker.hoKhauTinh,
       toTruong: worker.toTruong, sdtToTruong: worker.sdtToTruong,
       ngayVaoKTX: worker.ngayVaoKTX, ngayRaKTX: worker.ngayRaKTX, ghiChu: worker.ghiChu,
+      avatar: worker.avatar,
     } : { ktx: 'KTX 2', donVi: 'XD', gioiTinh: 'Nam', day: dayList[0] || 'Dãy 3', phongSo: '1' },
   });
 
   const watchedCheckIn = watch('ngayVaoKTX');
   const watchedCheckOut = watch('ngayRaKTX');
   const previewDays = calcSoNgay(watchedCheckIn || '', watchedCheckOut || '');
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarError('');
+    setAvatarUploading(true);
+    try {
+      // Compress to under 300KB
+      const compressed = await compressImage(file, 300);
+      const ext = 'jpg';
+      const fileName = `cccd_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const supabase = createClient();
+
+      // Upload to Supabase Storage bucket 'worker-avatars'
+      const { data, error } = await supabase.storage
+        .from('worker-avatars')
+        .upload(fileName, compressed, { contentType: 'image/jpeg', upsert: false });
+
+      if (error) {
+        // If bucket doesn't exist, try 'avatars' bucket as fallback
+        const { data: data2, error: error2 } = await supabase.storage
+          .from('avatars')
+          .upload(fileName, compressed, { contentType: 'image/jpeg', upsert: false });
+        if (error2) {
+          setAvatarError(`Lỗi upload: ${error2.message}`);
+          return;
+        }
+        const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(data2!.path);
+        setAvatarUrl(urlData.publicUrl);
+      } else {
+        const { data: urlData } = supabase.storage.from('worker-avatars').getPublicUrl(data!.path);
+        setAvatarUrl(urlData.publicUrl);
+      }
+    } catch (err) {
+      setAvatarError(`Lỗi xử lý ảnh: ${err instanceof Error ? err.message : 'Không thể upload'}`);
+    } finally {
+      setAvatarUploading(false);
+      // Reset input so same file can be re-selected
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const onSubmit = async (data: FormData) => {
     setSaving(true);
@@ -55,6 +144,7 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
       id: worker?.id ?? `new-${Date.now()}`,
       stt: worker?.stt ?? 0,
       khoaTraCuu: `${data.day}|${data.phongSo}|${data.giuong}`,
+      avatar: avatarUrl || data.avatar || '',
     };
     onSave(saved);
     setSaving(false);
@@ -109,6 +199,57 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                   <label className="label-field">Hộ khẩu Tỉnh/TP</label>
                   <input {...register('hoKhauTinh')} className="input-field" placeholder="VD: An Giang" list="province-list" />
                   <datalist id="province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                </div>
+
+                {/* CCCD Photo Upload */}
+                <div className="sm:col-span-2 form-group">
+                  <label className="label-field">Ảnh CCCD</label>
+                  <div className="flex items-start gap-3">
+                    {/* Preview */}
+                    <div className="flex-shrink-0 w-24 h-16 rounded-lg border-2 border-dashed border-border bg-muted/30 flex items-center justify-center overflow-hidden">
+                      {avatarUrl ? (
+                        <img src={avatarUrl} alt="Ảnh CCCD" className="w-full h-full object-cover rounded-lg" />
+                      ) : (
+                        <ImageIcon size={20} className="text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="flex gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={avatarUploading}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-white hover:bg-muted text-xs font-semibold text-foreground transition-colors disabled:opacity-50"
+                        >
+                          {avatarUploading ? (
+                            <><Loader2 size={12} className="animate-spin" />Đang upload...</>
+                          ) : (
+                            <><Camera size={12} />Chụp / Chọn ảnh</>
+                          )}
+                        </button>
+                        {avatarUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setAvatarUrl('')}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-xs font-semibold text-red-600 transition-colors"
+                          >
+                            <Trash2 size={12} />Xóa ảnh
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">Hỗ trợ chụp trực tiếp từ camera hoặc chọn file. Ảnh tự động nén dưới 300KB.</p>
+                      {avatarError && <p className="text-xs text-red-500">{avatarError}</p>}
+                    </div>
+                  </div>
+                  {/* Hidden file input — capture="environment" enables rear camera on mobile */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={handleAvatarChange}
+                  />
                 </div>
               </div>
             </div>
@@ -192,7 +333,7 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
             <p className="text-xs text-muted-foreground"><span className="text-red-500">*</span> Trường bắt buộc</p>
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className="btn-secondary text-xs">Hủy bỏ</button>
-              <button type="submit" disabled={saving} className="btn-primary text-xs min-w-[110px] justify-center">
+              <button type="submit" disabled={saving || avatarUploading} className="btn-primary text-xs min-w-[110px] justify-center">
                 {saving ? <><Loader2 size={13} className="animate-spin" />Đang lưu...</> : <><Save size={13} />{isEdit ? 'Lưu thay đổi' : 'Thêm công nhân'}</>}
               </button>
             </div>

@@ -4,9 +4,11 @@ import { useRouter } from 'next/navigation';
 import AppLayout from '@/components/AppLayout';
 import { useWorkers } from '@/context/WorkerContext';
 import { getUniqueKTX, getUniqueBuildings, getUniqueRooms, countUniqueBuildings, ROOM_CAPACITY } from '@/data/workers';
-import { Users, LayoutGrid, Percent, AlertCircle, FileSpreadsheet, Wifi, ChevronDown, Search, X, Download, UserPlus, AlertTriangle, TrendingUp, TrendingDown, XCircle, GitBranch, Building2, HardHat, VenusAndMars } from 'lucide-react';
+import { Users, LayoutGrid, Percent, AlertCircle, FileSpreadsheet, Wifi, ChevronDown, Search, X, Download, UserPlus, AlertTriangle, TrendingUp, TrendingDown, XCircle, GitBranch, HardHat, VenusAndMars } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
+import Icon from '@/components/ui/AppIcon';
+
 
 
 const RoomDrawer = dynamic(() => import('./components/RoomDrawer'), { ssr: false });
@@ -266,6 +268,8 @@ export default function OccupancyDashboardPage() {
   const [ktxStats, setKtxStats] = useState({ ktx1: 0, ktx2: 0 });
   const [dashboardTotal, setDashboardTotal] = useState(0);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [genderByKtx, setGenderByKtx] = useState<Record<string, { male: number; female: number }>>({});
+  const [contractorByKtx, setContractorByKtx] = useState<Record<string, [string, number][]>>({});
   // Block assignments: map of "KTX X - Dãy Y" -> staffName
   const [blockAssignments, setBlockAssignments] = useState<BlockAssignment[]>([]);
 
@@ -308,31 +312,99 @@ export default function OccupancyDashboardPage() {
     const fetchStats = async () => {
       setStatsLoading(true);
       const supabase = createClient();
-      const count = (query: PromiseLike<{ count: number | null }>) =>
-        query.then(({ count: value }) => value ?? 0);
 
-      const [total, male, female, ktx1, ktx2, xd, me, vinalpha] = await Promise.all([
-        count(supabase.from('workers').select('*', { count: 'exact', head: true })),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).ilike('gioi_tinh', '%nam%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).or('gioi_tinh.ilike.%nữ%,gioi_tinh.ilike.%nu%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).ilike('ktx', '%1%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).ilike('ktx', '%2%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).or('don_vi.ilike.%xd%,don_vi.ilike.%xây%,don_vi.ilike.%xay%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).or('don_vi.ilike.%me%,don_vi.ilike.%cơ%,don_vi.ilike.%co%')),
-        count(supabase.from('workers').select('*', { count: 'exact', head: true }).or('don_vi.ilike.%vinalpha%,don_vi.ilike.%alpha%')),
-      ]);
+      try {
+        // 1. Total count
+        const { count: total } = await supabase
+          .from('workers')
+          .select('*', { count: 'exact', head: true });
 
-      if (!active) return;
-      setDashboardTotal(total);
-      setGenderStats({ male, female });
-      setKtxStats({ ktx1, ktx2 });
-      setContractorStats([
-        ['XD', xd], ['ME', me], ['Vinalpha', vinalpha],
-        ['Khác', Math.max(0, total - xd - me - vinalpha)],
-      ]);
-      setStatsLoading(false);
+        // 2+4. Paginated fetch for all workers' ktx, gioi_tinh, don_vi (bypasses 1000-row Supabase limit)
+        let allWorkersData: { ktx: string; gioi_tinh: string; don_vi: string }[] = [];
+        let fetchFrom = 0;
+        const FETCH_SIZE = 1000;
+        let fetchHasMore = true;
+        while (fetchHasMore) {
+          const { data: batch } = await supabase
+            .from('workers')
+            .select('ktx, gioi_tinh, don_vi')
+            .range(fetchFrom, fetchFrom + FETCH_SIZE - 1);
+          if (!batch || batch.length === 0) { fetchHasMore = false; break; }
+          allWorkersData = allWorkersData.concat(batch as { ktx: string; gioi_tinh: string; don_vi: string }[]);
+          if (batch.length < FETCH_SIZE) { fetchHasMore = false; } else { fetchFrom += FETCH_SIZE; }
+        }
+
+        // Count gender totals and per-KTX from paginated data
+        let maleCount = 0;
+        let femaleCount = 0;
+        const donViMap: Record<string, number> = {};
+        const donViPerKtx: Record<string, Record<string, number>> = {};
+        const genderPerKtx: Record<string, { male: number; female: number }> = {};
+
+        allWorkersData.forEach(row => {
+          const ktxKey = (row.ktx ?? '').trim();
+          const g = (row.gioi_tinh ?? '').trim().toLowerCase();
+
+          // Normalize gender
+          const isMale = g === 'nam' || (g.startsWith('na'));
+          const isFemale = g === 'nữ' || g === 'nu' || g === 'nư' || g === 'n\u1EEF' || (g.startsWith('n') && !g.startsWith('na'));
+
+          if (isMale) maleCount++;
+          else if (isFemale) femaleCount++;
+
+          // Gender per KTX
+          if (ktxKey) {
+            if (!genderPerKtx[ktxKey]) genderPerKtx[ktxKey] = { male: 0, female: 0 };
+            if (isMale) genderPerKtx[ktxKey].male++;
+            else if (isFemale) genderPerKtx[ktxKey].female++;
+          }
+
+          // Contractor overall and per KTX
+          const dv = (row.don_vi ?? '').trim();
+          if (dv) {
+            donViMap[dv] = (donViMap[dv] || 0) + 1;
+            if (ktxKey) {
+              if (!donViPerKtx[ktxKey]) donViPerKtx[ktxKey] = {};
+              donViPerKtx[ktxKey][dv] = (donViPerKtx[ktxKey][dv] || 0) + 1;
+            }
+          }
+        });
+
+        // 3. KTX stats — use exact match (count queries are always accurate)
+        const [ktx1Result, ktx2Result] = await Promise.all([
+          supabase.from('workers').select('*', { count: 'exact', head: true }).eq('ktx', 'KTX 1'),
+          supabase.from('workers').select('*', { count: 'exact', head: true }).eq('ktx', 'KTX 2'),
+        ]);
+        const ktx1 = ktx1Result.count;
+        const ktx2 = ktx2Result.count;
+
+        // Sort by count descending, take top entries
+        const sortedDonVi = Object.entries(donViMap)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 6);
+
+        const contractorPerKtx: Record<string, [string, number][]> = {};
+        Object.entries(donViPerKtx).forEach(([ktxKey, map]) => {
+          contractorPerKtx[ktxKey] = Object.entries(map)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+        });
+
+        if (!active) return;
+
+        setDashboardTotal(total ?? 0);
+        setGenderStats({ male: maleCount, female: femaleCount });
+        setKtxStats({ ktx1: ktx1 ?? 0, ktx2: ktx2 ?? 0 });
+        setContractorStats(sortedDonVi);
+        setGenderByKtx(genderPerKtx);
+        setContractorByKtx(contractorPerKtx);
+      } catch (err) {
+        console.error('fetchStats error:', err);
+      } finally {
+        if (active) setStatsLoading(false);
+      }
     };
-    fetchStats().catch(() => { if (active) setStatsLoading(false); });
+    fetchStats();
     return () => { active = false; };
   }, []);
 
@@ -592,56 +664,84 @@ export default function OccupancyDashboardPage() {
         </div>
 
         {/* ── Detailed statistics ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+          {/* Gender Stats */}
           <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
               <VenusAndMars size={17} className="text-primary" />
               <h2 className="text-sm font-semibold text-foreground">Thống kê giới tính</h2>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            {/* Overall totals */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
-                <p className="text-xs text-blue-600 font-medium">Nam</p>
-                <p className="text-xl font-bold text-blue-700 font-tabular">{genderStats.male}</p>
+                <p className="text-xs text-blue-600 font-medium">Nam (Toàn KTX)</p>
+                <p className="text-2xl font-bold text-blue-700 font-tabular">{genderStats.male}</p>
               </div>
               <div className="rounded-lg bg-pink-50 border border-pink-100 p-3">
-                <p className="text-xs text-pink-600 font-medium">Nữ</p>
-                <p className="text-xl font-bold text-pink-700 font-tabular">{genderStats.female}</p>
+                <p className="text-xs text-pink-600 font-medium">Nữ (Toàn KTX)</p>
+                <p className="text-2xl font-bold text-pink-700 font-tabular">{genderStats.female}</p>
               </div>
             </div>
+            {/* Per-KTX breakdown */}
+            {Object.keys(genderByKtx).sort().length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Chi tiết theo KTX</p>
+                {Object.keys(genderByKtx).sort().map(ktxKey => (
+                  <div key={ktxKey} className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+                    <p className="text-xs font-semibold text-foreground mb-1.5">{ktxKey}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex items-center justify-between rounded bg-blue-50 px-2 py-1">
+                        <span className="text-xs text-blue-600 font-medium">Nam</span>
+                        <span className="text-sm font-bold text-blue-700 font-tabular">{genderByKtx[ktxKey].male}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded bg-pink-50 px-2 py-1">
+                        <span className="text-xs text-pink-600 font-medium">Nữ</span>
+                        <span className="text-sm font-bold text-pink-700 font-tabular">{genderByKtx[ktxKey].female}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
+          {/* Contractor/Unit Stats */}
           <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
               <HardHat size={17} className="text-orange-500" />
               <h2 className="text-sm font-semibold text-foreground">Đơn vị / Nhà thầu</h2>
             </div>
-            <div className="grid grid-cols-2 gap-2 max-h-28 overflow-y-auto">
-              {contractorStats.length > 0 ? contractorStats.map(([name, count]) => (
-                <div key={name} className="flex items-center justify-between rounded-lg bg-orange-50 px-3 py-2">
-                  <span className="text-xs text-orange-800 truncate mr-2">{name}</span>
-                  <span className="text-sm font-bold text-orange-700 font-tabular">{count}</span>
-                </div>
-              )) : <p className="text-xs text-muted-foreground col-span-2">Chưa có dữ liệu</p>}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-border bg-white p-4 shadow-sm">
-            <div className="flex items-center gap-2 mb-3">
-              <Building2 size={17} className="text-indigo-500" />
-              <h2 className="text-sm font-semibold text-foreground">Phân bổ theo Khu KTX</h2>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg bg-indigo-50 text-indigo-700 p-3">
-                <p className="text-xs font-medium">KTX 1</p>
-                <p className="text-xl font-bold font-tabular">{ktxStats.ktx1}</p>
-                <p className="text-[10px] opacity-75">công nhân</p>
-              </div>
-              <div className="rounded-lg bg-violet-50 text-violet-700 p-3">
-                <p className="text-xs font-medium">KTX 2</p>
-                <p className="text-xl font-bold font-tabular">{ktxStats.ktx2}</p>
-                <p className="text-[10px] opacity-75">công nhân</p>
+            {/* Overall totals */}
+            <div className="mb-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tổng chung</p>
+              <div className="grid grid-cols-2 gap-2">
+                {contractorStats.length > 0 ? contractorStats.map(([name, count]) => (
+                  <div key={name} className="flex items-center justify-between rounded-lg bg-orange-50 border border-orange-100 px-3 py-2">
+                    <span className="text-xs text-orange-800 truncate mr-2">{name}</span>
+                    <span className="text-sm font-bold text-orange-700 font-tabular">{count}</span>
+                  </div>
+                )) : <p className="text-xs text-muted-foreground col-span-2">Chưa có dữ liệu</p>}
               </div>
             </div>
+            {/* Per-KTX breakdown */}
+            {Object.keys(contractorByKtx).sort().length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Chi tiết theo KTX</p>
+                {Object.keys(contractorByKtx).sort().map(ktxKey => (
+                  <div key={ktxKey} className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+                    <p className="text-xs font-semibold text-foreground mb-1.5">{ktxKey}</p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {contractorByKtx[ktxKey].map(([name, count]) => (
+                        <div key={name} className="flex items-center justify-between rounded bg-orange-50 px-2 py-1">
+                          <span className="text-xs text-orange-800 truncate mr-1">{name}</span>
+                          <span className="text-xs font-bold text-orange-700 font-tabular">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
