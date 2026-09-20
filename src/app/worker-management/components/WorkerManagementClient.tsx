@@ -175,6 +175,10 @@ interface ParsedWorkerRow {
   ngayVao: string;
   ghiChu: string;
   ktxFromExcel: string;
+  gioiTinh: string;
+  donVi: string;
+  tieuDoan: string;
+  giuong: string;
 }
 
 const PREVIEW_HEADERS = ['KTX', 'Họ và Tên', 'Mã NV', 'CCCD', 'SĐT', 'Dãy', 'Phòng', 'Ngày Sinh', 'Quê Quán', 'Tổ Trưởng', 'Ngày Vào KTX', 'Ghi Chú'];
@@ -253,6 +257,10 @@ function ExcelImportModal({ onClose, onImport }: { onClose: () => void; onImport
         const iNgayVao = findCol('NGÀY VÀO KTX', 'NGAY VAO KTX', 'NGÀY VÀO', 'NGAY VAO');
         const iGhiChu = findCol('GHI CHÚ', 'GHI CHU', 'GHICHU');
         const iKtx = findCol('KTX', 'KÝ TÚC XÁ', 'KY TUC XA', 'KÝ TÚC XÁ', 'KTX_NAME');
+        const iGioiTinh = findCol('GIỚI TÍNH', 'GIOI TINH', 'GIOITINH', 'GENDER', 'GT');
+        const iDonVi = findCol('ĐƠN VỊ', 'DON VI', 'DONVI', 'NHÀ THẦU', 'NHA THAU', 'UNIT');
+        const iTieuDoan = findCol('TIỂU ĐOÀN', 'TIEU DOAN', 'TRUNG ĐOÀN', 'TRUNG DOAN', 'TIEUDOAN');
+        const iGiuong = findCol('SỐ GIƯỜNG', 'SO GIUONG', 'GIƯỜNG', 'GIUONG', 'BED', 'GIƯỜNG SỐ');
 
         const foundKtxCol = iKtx >= 0;
         setHasKtxColumn(foundKtxCol);
@@ -305,6 +313,10 @@ function ExcelImportModal({ onClose, onImport }: { onClose: () => void; onImport
             ngayVao: iNgayVao >= 0 ? parseExcelDate(row[iNgayVao]) : '',
             ghiChu: iGhiChu >= 0 ? cellToString(row[iGhiChu]) : '',
             ktxFromExcel,
+            gioiTinh: iGioiTinh >= 0 ? cellToString(row[iGioiTinh]) : '',
+            donVi: iDonVi >= 0 ? cellToString(row[iDonVi]) : '',
+            tieuDoan: iTieuDoan >= 0 ? cellToString(row[iTieuDoan]) : '',
+            giuong: iGiuong >= 0 ? cellToString(row[iGiuong]) : '',
           });
         }
 
@@ -350,15 +362,15 @@ function ExcelImportModal({ onClose, onImport }: { onClose: () => void; onImport
         stt: 0,
         hoVaTen: r.hoTen,
         maNV: r.maCongNhan,
-        tieuDoan: '',
+        tieuDoan: r.tieuDoan || '',
         ktx: ktxValue,
-        donVi: 'XD',
-        gioiTinh: 'Nam',
+        donVi: r.donVi || '',
+        gioiTinh: r.gioiTinh || '',
         ngaySinh: r.ngaySinh,
         soDienThoai: r.soDienThoai,
         day: dayNorm,
         phongSo: phongNorm,
-        giuong: '',
+        giuong: r.giuong || '',
         cccd: r.soCCCD,
         hoKhauTinh: r.queQuan,
         toTruong: r.toTruong,
@@ -441,7 +453,7 @@ function ExcelImportModal({ onClose, onImport }: { onClose: () => void; onImport
               <FileText size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
               <div className="text-xs text-blue-700 space-y-0.5">
                 <p className="font-semibold">Cột được nhận diện tự động:</p>
-                <p>KTX · HỌ VÀ TÊN · MÃ NV · CCCD · SỐ ĐIỆN THOẠI · DÃY · PHÒNG SỐ · NGÀY SINH · HỘ KHẨU · TỔ TRƯỞNG · SĐT TỔ TRƯỞNG · NGÀY VÀO KTX · GHI CHÚ</p>
+                <p>KTX · HỌ VÀ TÊN · MÃ NV · GIỚI TÍNH · ĐƠN VỊ · TIỂU ĐOÀN · CCCD · SỐ ĐIỆN THOẠI · DÃY · PHÒNG SỐ · SỐ GIƯỜNG · NGÀY SINH · HỘ KHẨU · TỔ TRƯỞNG · SĐT TỔ TRƯỞNG · NGÀY VÀO KTX · GHI CHÚ</p>
               </div>
             </div>
           </div>
@@ -984,7 +996,7 @@ function BulkDeleteByFilterModal({
 }
 
 export default function WorkerManagementClient() {
-  const { workers, loading, addWorker, updateWorker, deleteWorkers, deleteAllWorkers, importWorkers, updateTamTruStatus, bulkUpdateKtx } = useWorkers();
+  const { workers, loading, addWorker, updateWorker, deleteWorkers, deleteAllWorkers, importWorkers, updateTamTruStatus, bulkUpdateKtx, refreshWorkers } = useWorkers();
   const searchParams = useSearchParams();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [sortKey, setSortKey] = useState<keyof Worker>('stt');
@@ -1246,12 +1258,14 @@ export default function WorkerManagementClient() {
 
   const handleImport = useCallback(async (rows: Worker[]) => {
     await importWorkers(rows);
+    // Force a full re-fetch so dashboard stats and all views sync immediately
+    await refreshWorkers();
     const userEmail = currentUser?.email ?? 'unknown';
     const userName = currentUser?.name ?? userEmail;
     const now = formatDateVN(nowVN());
     writeAuditLog('IMPORT', `Import ${rows.length} công nhân từ file Excel/CSV`);
     toast.success(`Đã nhập thành công ${rows.length} công nhân vào hệ thống`);
-  }, [currentUser, writeAuditLog, importWorkers]);
+  }, [currentUser, writeAuditLog, importWorkers, refreshWorkers]);
 
   if (loading) {
     return (

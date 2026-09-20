@@ -299,8 +299,8 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
         .upsert(batch, { onConflict: 'id' });
       if (error) throw new Error(error.message);
     }
-    // After import, re-fetch to get accurate state from DB
-    await fetchWorkers(false);
+    // After import, re-fetch to get accurate state from DB (refresh mode)
+    await fetchWorkers(true);
   }, [workers, fetchWorkers]);
 
   const updateTamTruStatus = useCallback(async (id: string, status: 'registered' | 'unregistered') => {

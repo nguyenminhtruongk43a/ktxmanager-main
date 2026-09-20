@@ -307,6 +307,9 @@ export default function OccupancyDashboardPage() {
       });
   }, []);
 
+  // Track workers length to trigger stats re-fetch when data changes
+  const workersLength = workers.length;
+
   useEffect(() => {
     let active = true;
     const fetchStats = async () => {
@@ -338,16 +341,23 @@ export default function OccupancyDashboardPage() {
         let maleCount = 0;
         let femaleCount = 0;
         const donViMap: Record<string, number> = {};
+        const donViDisplayMap: Record<string, string> = {}; // uppercase key → first-seen display name
         const donViPerKtx: Record<string, Record<string, number>> = {};
         const genderPerKtx: Record<string, { male: number; female: number }> = {};
 
         allWorkersData.forEach(row => {
           const ktxKey = (row.ktx ?? '').trim();
-          const g = (row.gioi_tinh ?? '').trim().toLowerCase();
+          const g = (row.gioi_tinh ?? '').trim();
+          // Normalize to ASCII lowercase for reliable comparison across all Vietnamese input variants
+          const gNorm = g
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '') // strip diacritics
+            .trim();
 
-          // Normalize gender
-          const isMale = g === 'nam' || (g.startsWith('na'));
-          const isFemale = g === 'nữ' || g === 'nu' || g === 'nư' || g === 'n\u1EEF' || (g.startsWith('n') && !g.startsWith('na'));
+          // "Nam", "NAM", "nam" → "nam"; "Nữ", "NỮ", "nu", "nư", "nữ" → "nu"
+          const isMale = gNorm === 'nam';
+          const isFemale = !isMale && (gNorm === 'nu' || gNorm === 'n' || (gNorm.startsWith('n') && gNorm.length <= 3 && gNorm !== 'nam'));
 
           if (isMale) maleCount++;
           else if (isFemale) femaleCount++;
@@ -359,13 +369,15 @@ export default function OccupancyDashboardPage() {
             else if (isFemale) genderPerKtx[ktxKey].female++;
           }
 
-          // Contractor overall and per KTX
-          const dv = (row.don_vi ?? '').trim();
-          if (dv) {
-            donViMap[dv] = (donViMap[dv] || 0) + 1;
+          // Contractor overall and per KTX — group case-insensitively (merge "ME", "me", "Me")
+          const dvRaw = (row.don_vi ?? '').trim();
+          if (dvRaw) {
+            const dvKey = dvRaw.toUpperCase();
+            if (!donViDisplayMap[dvKey]) donViDisplayMap[dvKey] = dvRaw; // keep first-seen casing for display
+            donViMap[dvKey] = (donViMap[dvKey] || 0) + 1;
             if (ktxKey) {
               if (!donViPerKtx[ktxKey]) donViPerKtx[ktxKey] = {};
-              donViPerKtx[ktxKey][dv] = (donViPerKtx[ktxKey][dv] || 0) + 1;
+              donViPerKtx[ktxKey][dvKey] = (donViPerKtx[ktxKey][dvKey] || 0) + 1;
             }
           }
         });
@@ -378,16 +390,18 @@ export default function OccupancyDashboardPage() {
         const ktx1 = ktx1Result.count;
         const ktx2 = ktx2Result.count;
 
-        // Sort by count descending, take top entries
-        const sortedDonVi = Object.entries(donViMap)
+        // Sort by count descending, take top entries — restore display names
+        const sortedDonVi: [string, number][] = Object.entries(donViMap)
           .sort((a, b) => b[1] - a[1])
-          .slice(0, 6);
+          .slice(0, 6)
+          .map(([key, count]) => [donViDisplayMap[key] ?? key, count]);
 
         const contractorPerKtx: Record<string, [string, number][]> = {};
         Object.entries(donViPerKtx).forEach(([ktxKey, map]) => {
           contractorPerKtx[ktxKey] = Object.entries(map)
             .sort((a, b) => b[1] - a[1])
-            .slice(0, 5);
+            .slice(0, 5)
+            .map(([key, count]) => [donViDisplayMap[key] ?? key, count]);
         });
 
         if (!active) return;
@@ -406,7 +420,7 @@ export default function OccupancyDashboardPage() {
     };
     fetchStats();
     return () => { active = false; };
-  }, []);
+  }, [workersLength]); // Re-fetch stats whenever workers count changes (e.g. after Excel import)
 
   // ── KPI calculations scoped to selected KTX ───────────────────────────────
   // All-KTX metrics
