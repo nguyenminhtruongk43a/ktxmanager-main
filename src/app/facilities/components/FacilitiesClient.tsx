@@ -1,7 +1,11 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Search, Edit2, Check, X, Plus, Loader2, BedDouble, Wind, Package, Fan, Zap, Tv, Lightbulb, UtensilsCrossed, ChevronDown, ChevronUp, Upload, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  Search, Edit2, Check, X, Plus, Loader2, BedDouble, Wind, Package, Fan,
+  Zap, Tv, Lightbulb, UtensilsCrossed, ChevronDown, ChevronUp, Upload,
+  AlertCircle, CheckCircle2, Download, Trash2, Filter
+} from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface FacilityRow {
@@ -64,22 +68,12 @@ const METRIC_CARDS: MetricCard[] = [
 const NUMERIC_FIELDS: (keyof EditingRow)[] = ['giuong', 'dieu_hoa', 'tu', 'quat', 'o_cam_dien', 'remote', 'bong_tuyp', 'ban_an', 'ghe_an'];
 
 // ─── Excel column header → DB field mapping ───────────────────────────────────
-// Normalize: trim, lowercase, collapse whitespace, strip diacritics for fuzzy match
 function normalizeHeader(h: string): string {
-  return h
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  return h.toString().trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-// Strip Vietnamese diacritics for loose matching
 function stripDiacritics(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D');
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
 }
 
 function normalizeLoose(h: string): string {
@@ -88,44 +82,27 @@ function normalizeLoose(h: string): string {
 
 type DbField = keyof Omit<FacilityRow, 'id' | 'ktx'>;
 
-// Map normalized (with diacritics) header → DB field
 const COLUMN_MAP_EXACT: Record<string, DbField> = {
-  // STT (row number — used for header detection only, not stored)
-  'stt': 'day', // placeholder; STT column is detected but not mapped to a field
-
-  // Dãy
   'dãy': 'day', 'day': 'day', 'dây': 'day', 'dãy/khu': 'day',
-  // Phòng/Khu vực
   'phòng': 'phong_khu_vuc', 'phòng/khu vực': 'phong_khu_vuc', 'khu vực': 'phong_khu_vuc',
   'phong': 'phong_khu_vuc', 'phong/khu vuc': 'phong_khu_vuc', 'khu vuc': 'phong_khu_vuc',
   'phòng/khu': 'phong_khu_vuc', 'phong khu vuc': 'phong_khu_vuc',
   'phòng/khu vuc': 'phong_khu_vuc', 'phong/khu vực': 'phong_khu_vuc',
-  // Giường
   'giường': 'giuong', 'giuong': 'giuong', 'số giường': 'giuong', 'so giuong': 'giuong',
-  // Điều hòa
   'điều hòa': 'dieu_hoa', 'dieu hoa': 'dieu_hoa', 'điều hoà': 'dieu_hoa', 'ac': 'dieu_hoa',
   'dieu hòa': 'dieu_hoa', 'điều hoa': 'dieu_hoa',
-  // Tủ
   'tủ': 'tu', 'tu': 'tu', 'số tủ': 'tu',
-  // Quạt
   'quạt': 'quat', 'quat': 'quat', 'số quạt': 'quat',
-  // Ổ cắm
   'ổ cắm': 'o_cam_dien', 'o cam': 'o_cam_dien', 'ổ cắm điện': 'o_cam_dien', 'o cam dien': 'o_cam_dien',
   'ổ điện': 'o_cam_dien', 'o dien': 'o_cam_dien', 'ổ cắm dien': 'o_cam_dien',
-  // Remote
   'remote': 'remote', 'điều khiển': 'remote', 'dieu khien': 'remote', 'điều khiên': 'remote',
-  // Bóng tuýp
   'bóng tuýp': 'bong_tuyp', 'bong tuyp': 'bong_tuyp', 'bóng đèn': 'bong_tuyp', 'bong den': 'bong_tuyp',
   'tuýp': 'bong_tuyp', 'tuyp': 'bong_tuyp', 'bóng tuyp': 'bong_tuyp', 'bong tuýp': 'bong_tuyp',
-  // Bàn ăn
   'bàn ăn': 'ban_an', 'ban an': 'ban_an', 'bàn': 'ban_an',
-  // Ghế ăn
   'ghế ăn': 'ghe_an', 'ghe an': 'ghe_an', 'ghế': 'ghe_an',
-  // Ghi chú
   'ghi chú': 'ghi_chu', 'ghi chu': 'ghi_chu', 'note': 'ghi_chu', 'notes': 'ghi_chu',
 };
 
-// Loose map (no diacritics) for fallback matching
 const COLUMN_MAP_LOOSE: Record<string, DbField> = {
   'day': 'day', 'day/khu': 'day',
   'phong': 'phong_khu_vuc', 'phong/khu vuc': 'phong_khu_vuc', 'khu vuc': 'phong_khu_vuc',
@@ -145,17 +122,9 @@ const COLUMN_MAP_LOOSE: Record<string, DbField> = {
 function resolveColumnField(rawHeader: string): DbField | 'stt' | null {
   const norm = normalizeHeader(rawHeader);
   const loose = normalizeLoose(rawHeader);
-
-  // STT detection (row number column — used only for header row detection)
   if (norm === 'stt' || loose === 'stt') return 'stt';
-
-  // Exact match with diacritics
   if (COLUMN_MAP_EXACT[norm]) return COLUMN_MAP_EXACT[norm];
-
-  // Loose match (no diacritics)
   if (COLUMN_MAP_LOOSE[loose]) return COLUMN_MAP_LOOSE[loose];
-
-  // Partial / contains match for common keywords
   if (loose.includes('giuong')) return 'giuong';
   if (loose.includes('dieu hoa') || loose.includes('dieu hòa')) return 'dieu_hoa';
   if (loose.includes('o cam')) return 'o_cam_dien';
@@ -165,60 +134,32 @@ function resolveColumnField(rawHeader: string): DbField | 'stt' | null {
   if (loose.includes('remote') || loose.includes('dieu khien')) return 'remote';
   if (loose.includes('quat')) return 'quat';
   if (loose.includes('phong') || loose.includes('khu vuc')) return 'phong_khu_vuc';
-
   return null;
 }
 
-// ─── Determine KTX name from sheet name ───────────────────────────────────────
 function resolveKtxFromSheetName(sheetName: string): 'KTX 1' | 'KTX 2' | null {
   const loose = normalizeLoose(sheetName).replace(/\s+/g, '');
-  // Contains "1" → KTX 1; contains "2" → KTX 2
   if (/ktx.*1|1.*ktx|ktxtucxa1|kytuxa1|ktx1/.test(loose)) return 'KTX 1';
   if (/ktx.*2|2.*ktx|ktxtucxa2|kytuxa2|ktx2/.test(loose)) return 'KTX 2';
-
-  // Broader: any sheet name containing "1" or "2" as the distinguishing digit
   const norm = normalizeHeader(sheetName);
   if (/\b1\b/.test(norm) || norm.endsWith('1') || norm.endsWith(' 1')) return 'KTX 1';
   if (/\b2\b/.test(norm) || norm.endsWith('2') || norm.endsWith(' 2')) return 'KTX 2';
-
   return null;
 }
 
-// ─── Core sheet parser ────────────────────────────────────────────────────────
-/**
- * Parse a single worksheet into facility rows.
- *
- * Header detection strategy (in order):
- *  1. Find the first row (within rows 1–10) that contains the keyword "STT"
- *     → that row is the header row; data starts from the NEXT row.
- *  2. If "STT" is not found, default to row 7 (index 6) as the header row
- *     → data starts from row 8 (index 7).
- *  3. Additionally scan the header row for all known column keywords and build
- *     a column index → DB field map.
- */
 function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<FacilityRow, 'id'>[] {
   const jsonData: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   if (!jsonData || jsonData.length < 2) return [];
-
   const SEARCH_LIMIT = Math.min(10, jsonData.length);
-
   let headerRowIdx = -1;
   let headerMap: Record<number, DbField> = {};
 
-  // ── Step 1: Find row containing "STT" ──
   for (let i = 0; i < SEARCH_LIMIT; i++) {
     const row = jsonData[i];
-    const hasStt = row.some((cell: any) => {
-      const n = normalizeHeader(String(cell ?? ''));
-      return n === 'stt';
-    });
-    if (hasStt) {
-      headerRowIdx = i;
-      break;
-    }
+    const hasStt = row.some((cell: any) => normalizeHeader(String(cell ?? '')) === 'stt');
+    if (hasStt) { headerRowIdx = i; break; }
   }
 
-  // ── Step 2: Fallback — find row with most column matches ──
   if (headerRowIdx === -1) {
     let bestMatchCount = 0;
     for (let i = 0; i < SEARCH_LIMIT; i++) {
@@ -228,51 +169,27 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
         const field = resolveColumnField(String(cell ?? ''));
         if (field && field !== 'stt') matchCount++;
       });
-      if (matchCount > bestMatchCount) {
-        bestMatchCount = matchCount;
-        headerRowIdx = i;
-      }
+      if (matchCount > bestMatchCount) { bestMatchCount = matchCount; headerRowIdx = i; }
     }
-    // If still no good match found (0 or 1 column), default to row 7 (index 6)
-    if (bestMatchCount < 2) {
-      headerRowIdx = Math.min(6, jsonData.length - 1);
-    }
+    if (bestMatchCount < 2) headerRowIdx = Math.min(6, jsonData.length - 1);
   }
 
-  // ── Step 3: Build column map from the detected header row ──
   const headerRow = jsonData[headerRowIdx] || [];
   headerRow.forEach((cell: any, colIdx: number) => {
     const field = resolveColumnField(String(cell ?? ''));
-    if (field && field !== 'stt') {
-      headerMap[colIdx] = field as DbField;
-    }
+    if (field && field !== 'stt') headerMap[colIdx] = field as DbField;
   });
 
-  // Data starts immediately after the header row
   const dataStartIdx = headerRowIdx + 1;
-
   const results: Omit<FacilityRow, 'id'>[] = [];
 
   for (let i = dataStartIdx; i < jsonData.length; i++) {
     const row = jsonData[i];
     if (!row || row.every((c: any) => c === '' || c === null || c === undefined)) continue;
-
     const record: Omit<FacilityRow, 'id'> = {
-      ktx: ktxName,
-      day: '',
-      phong_khu_vuc: '',
-      giuong: 0,
-      dieu_hoa: 0,
-      tu: 0,
-      quat: 0,
-      o_cam_dien: 0,
-      remote: 0,
-      bong_tuyp: 0,
-      ban_an: 0,
-      ghe_an: 0,
-      ghi_chu: '',
+      ktx: ktxName, day: '', phong_khu_vuc: '', giuong: 0, dieu_hoa: 0, tu: 0,
+      quat: 0, o_cam_dien: 0, remote: 0, bong_tuyp: 0, ban_an: 0, ghe_an: 0, ghi_chu: '',
     };
-
     Object.entries(headerMap).forEach(([colIdxStr, field]) => {
       const colIdx = Number(colIdxStr);
       const cellVal = row[colIdx];
@@ -283,49 +200,132 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
         (record as any)[field] = isNaN(num) ? 0 : num;
       }
     });
-
-    // Skip rows without any room identifier
     if (!record.day && !record.phong_khu_vuc) continue;
-
     results.push(record);
   }
-
   return results;
 }
 
-// ─── Determine which KTX a sheet belongs to ───────────────────────────────────
-/**
- * For multi-sheet files: map each sheet to KTX 1 or KTX 2 by name.
- * For single-sheet files: assign KTX 1 by default (user can re-import for KTX 2).
- * Returns array of { sheetName, ktxName } pairs to process.
- */
 function resolveSheets(workbook: XLSX.WorkBook): { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] {
   const sheets = workbook.SheetNames;
-
   if (sheets.length === 1) {
-    // Single-sheet file: try to detect KTX from sheet name, default to KTX 1
     const ktx = resolveKtxFromSheetName(sheets[0]) ?? 'KTX 1';
     return [{ sheetName: sheets[0], ktxName: ktx }];
   }
-
-  // Multi-sheet: map each sheet by name
   const result: { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] = [];
   for (const sheetName of sheets) {
     const ktx = resolveKtxFromSheetName(sheetName);
-    if (ktx) {
-      result.push({ sheetName, ktxName: ktx });
-    }
+    if (ktx) result.push({ sheetName, ktxName: ktx });
   }
-
-  // If no sheets matched by name but there are exactly 2 sheets, assign KTX 1 and KTX 2 in order
   if (result.length === 0 && sheets.length >= 2) {
     result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
     result.push({ sheetName: sheets[1], ktxName: 'KTX 2' });
   } else if (result.length === 0 && sheets.length === 1) {
     result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
   }
-
   return result;
+}
+
+// ─── Delete Confirm Modal ─────────────────────────────────────────────────────
+function DeleteConfirmModal({ row, onConfirm, onCancel, deleting }: {
+  row: FacilityRow;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+            <Trash2 size={18} className="text-red-600" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground">Xóa phòng/khu vực</h3>
+            <p className="text-sm text-muted-foreground">Hành động này không thể hoàn tác.</p>
+          </div>
+        </div>
+        <div className="bg-muted/50 rounded-lg px-3 py-2 text-sm">
+          <span className="font-medium">{row.day}</span> — <span>{row.phong_khu_vuc}</span>
+          <span className="ml-2 text-muted-foreground text-xs">({row.ktx})</span>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} disabled={deleting}
+            className="px-4 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">
+            Hủy
+          </button>
+          <button onClick={onConfirm} disabled={deleting}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors">
+            {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Xóa
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Add Room Modal ───────────────────────────────────────────────────────────
+function AddRoomModal({ activeKtx, onSave, onClose, saving }: {
+  activeKtx: string;
+  onSave: (row: Omit<FacilityRow, 'id'>) => void;
+  onClose: () => void;
+  saving: boolean;
+}) {
+  const [form, setForm] = useState<Omit<FacilityRow, 'id'>>({
+    ktx: activeKtx, day: '', phong_khu_vuc: '', giuong: 0, dieu_hoa: 0, tu: 0,
+    quat: 0, o_cam_dien: 0, remote: 0, bong_tuyp: 0, ban_an: 0, ghe_an: 0, ghi_chu: ''
+  });
+  const canSave = form.day.trim() && form.phong_khu_vuc.trim();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-foreground">Thêm phòng/khu vực mới — {activeKtx}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Dãy *</label>
+            <input type="text" value={form.day} onChange={e => setForm(r => ({ ...r, day: e.target.value }))}
+              className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="Dãy A" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Phòng/Khu vực *</label>
+            <input type="text" value={form.phong_khu_vuc} onChange={e => setForm(r => ({ ...r, phong_khu_vuc: e.target.value }))}
+              className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="A101" />
+          </div>
+          {NUMERIC_FIELDS.map(f => (
+            <div key={f as string}>
+              <label className="text-xs text-muted-foreground mb-1 block">{METRIC_CARDS.find(m => m.key === f)?.label || f as string}</label>
+              <input type="number" min={0} value={(form as any)[f as string]}
+                onChange={e => setForm(r => ({ ...r, [f as string]: Number(e.target.value) }))}
+                className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary text-center" />
+            </div>
+          ))}
+          <div className="col-span-2 sm:col-span-3">
+            <label className="text-xs text-muted-foreground mb-1 block">Ghi chú</label>
+            <input type="text" value={form.ghi_chu} onChange={e => setForm(r => ({ ...r, ghi_chu: e.target.value }))}
+              className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="Ghi chú..." />
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end pt-2">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">
+            Hủy
+          </button>
+          <button onClick={() => onSave(form)} disabled={saving || !canSave}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Lưu phòng
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -333,17 +333,25 @@ export default function FacilitiesClient() {
   const [activeKtx, setActiveKtx] = useState<'KTX 1' | 'KTX 2'>('KTX 1');
   const [rows, setRows] = useState<FacilityRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+
+  // Filters
+  const [filterKtx, setFilterKtx] = useState<string>('');
+  const [filterDay, setFilterDay] = useState<string>('');
+  const [searchPhong, setSearchPhong] = useState('');
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingRow, setEditingRow] = useState<EditingRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newRow, setNewRow] = useState<Omit<FacilityRow, 'id'>>({
-    ktx: 'KTX 1', day: '', phong_khu_vuc: '', giuong: 0, dieu_hoa: 0, tu: 0,
-    quat: 0, o_cam_dien: 0, remote: 0, bong_tuyp: 0, ban_an: 0, ghe_an: 0, ghi_chu: ''
-  });
+
+  // Add modal
+  const [showAddModal, setShowAddModal] = useState(false);
   const [addingRow, setAddingRow] = useState(false);
+
+  // Delete modal
+  const [deleteTarget, setDeleteTarget] = useState<FacilityRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   const [sortField, setSortField] = useState<keyof FacilityRow>('day');
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -362,11 +370,8 @@ export default function FacilitiesClient() {
         .select('*')
         .order('day', { ascending: true })
         .order('phong_khu_vuc', { ascending: true });
-      if (error) {
-        console.error('Fetch facilities error:', error.message);
-      } else {
-        setRows(data || []);
-      }
+      if (error) console.error('Fetch facilities error:', error.message);
+      else setRows(data || []);
     } catch (e: any) {
       console.error('Fetch error:', e.message);
     } finally {
@@ -374,189 +379,170 @@ export default function FacilitiesClient() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchFacilities();
-  }, [fetchFacilities]);
+  useEffect(() => { fetchFacilities(); }, [fetchFacilities]);
 
-  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // ─── Derived filter options ───────────────────────────────────────────────
+  const allKtxOptions = Array.from(new Set(rows.map(r => r.ktx).filter(Boolean))).sort();
+  const allDayOptions = Array.from(new Set(
+    rows.filter(r => !filterKtx || r.ktx === filterKtx).map(r => r.day).filter(Boolean)
+  )).sort();
 
-    // Reset file input so same file can be re-imported
-    if (fileInputRef.current) fileInputRef.current.value = '';
-
-    setImporting(true);
-    setImportResult(null);
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-
-      // Resolve which sheets map to which KTX
-      const sheetMappings = resolveSheets(workbook);
-
-      let allParsedRows: Omit<FacilityRow, 'id'>[] = [];
-      const sheetLog: string[] = [];
-
-      for (const { sheetName, ktxName } of sheetMappings) {
-        const sheet = workbook.Sheets[sheetName];
-        const parsed = parseSheetToRows(sheet, ktxName);
-        sheetLog.push(`"${sheetName}" → ${ktxName}: ${parsed.length} dòng`);
-        allParsedRows = allParsedRows.concat(parsed);
-      }
-
-      console.log('[Import] Sheet mapping:', sheetLog.join(', '));
-      console.log('[Import] Total parsed rows:', allParsedRows.length);
-
-      if (allParsedRows.length === 0) {
-        setImportResult({
-          success: false,
-          message: `Không tìm thấy dữ liệu hợp lệ trong file. Kiểm tra lại file Excel (sheet: ${workbook.SheetNames.join(', ')}).`,
-          inserted: 0,
-          updated: 0,
-        });
-        setImporting(false);
-        return;
-      }
-
-      // Fetch existing rows to determine insert vs update
-      const { data: existingData, error: fetchErr } = await supabase
-        .from('facilities')
-        .select('id, ktx, day, phong_khu_vuc');
-
-      if (fetchErr) throw new Error(fetchErr.message);
-
-      const existingMap = new Map<string, string>();
-      (existingData || []).forEach((r: any) => {
-        const key = `${r.ktx}||${r.day}||${r.phong_khu_vuc}`;
-        existingMap.set(key, r.id);
-      });
-
-      const toInsert: Omit<FacilityRow, 'id'>[] = [];
-      const toUpdate: (Omit<FacilityRow, 'id'> & { id: string })[] = [];
-
-      allParsedRows.forEach(row => {
-        const key = `${row.ktx}||${row.day}||${row.phong_khu_vuc}`;
-        const existingId = existingMap.get(key);
-        if (existingId) {
-          toUpdate.push({ ...row, id: existingId });
-        } else {
-          toInsert.push(row);
-        }
-      });
-
-      let insertedCount = 0;
-      let updatedCount = 0;
-      const errors: string[] = [];
-
-      // Insert new rows in batches of 50
-      if (toInsert.length > 0) {
-        for (let i = 0; i < toInsert.length; i += 50) {
-          const batch = toInsert.slice(i, i + 50);
-          const { error: insertErr } = await supabase.from('facilities').insert(batch);
-          if (insertErr) {
-            errors.push(`Insert error: ${insertErr.message}`);
-          } else {
-            insertedCount += batch.length;
-          }
-        }
-      }
-
-      // Update existing rows
-      if (toUpdate.length > 0) {
-        for (const row of toUpdate) {
-          const { id, ...updateData } = row;
-          const { error: updateErr } = await supabase
-            .from('facilities')
-            .update(updateData)
-            .eq('id', id);
-          if (updateErr) {
-            errors.push(`Update error (${row.day} - ${row.phong_khu_vuc}): ${updateErr.message}`);
-          } else {
-            updatedCount++;
-          }
-        }
-      }
-
-      if (errors.length > 0) {
-        setImportResult({
-          success: false,
-          message: `Có lỗi xảy ra: ${errors.slice(0, 2).join('; ')}`,
-          inserted: insertedCount,
-          updated: updatedCount,
-        });
-      } else {
-        setImportResult({
-          success: true,
-          message: `Import thành công! Đã thêm ${insertedCount} dòng mới, cập nhật ${updatedCount} dòng.`,
-          inserted: insertedCount,
-          updated: updatedCount,
-        });
-      }
-
-      // Reload all data to refresh UI and metrics
-      await fetchFacilities();
-
-    } catch (err: any) {
-      setImportResult({
-        success: false,
-        message: `Lỗi đọc file: ${err.message}`,
-        inserted: 0,
-        updated: 0,
-      });
-    } finally {
-      setImporting(false);
+  // ─── Filtered rows ────────────────────────────────────────────────────────
+  const filteredRows = rows.filter(r => {
+    if (filterKtx && r.ktx !== filterKtx) return false;
+    if (filterDay && r.day !== filterDay) return false;
+    if (searchPhong.trim()) {
+      const q = searchPhong.toLowerCase();
+      if (!r.phong_khu_vuc?.toLowerCase().includes(q) && !r.day?.toLowerCase().includes(q)) return false;
     }
-  };
-
-  const ktxRows = rows.filter(r => r.ktx === activeKtx);
-
-  const filteredRows = ktxRows.filter(r => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return r.day?.toLowerCase().includes(q) || r.phong_khu_vuc?.toLowerCase().includes(q);
+    return true;
   });
 
   const sortedRows = [...filteredRows].sort((a, b) => {
     const av = a[sortField];
     const bv = b[sortField];
-    if (typeof av === 'number' && typeof bv === 'number') {
-      return sortAsc ? av - bv : bv - av;
-    }
-    const as = String(av ?? '');
-    const bs = String(bv ?? '');
-    return sortAsc ? as.localeCompare(bs) : bs.localeCompare(as);
+    if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av;
+    return sortAsc ? String(av ?? '').localeCompare(String(bv ?? '')) : String(bv ?? '').localeCompare(String(av ?? ''));
   });
 
-  // Totals calculated from ALL rows for the active KTX (not just filtered)
-  const totals = ktxRows.reduce((acc, r) => {
+  // Metrics calculated from filtered rows
+  const totals = filteredRows.reduce((acc, r) => {
     METRIC_CARDS.forEach(m => { acc[m.key] = (acc[m.key] || 0) + (r[m.key] || 0); });
     return acc;
   }, {} as Record<string, number>);
 
+  // ─── Import Excel ─────────────────────────────────────────────────────────
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      const sheetMappings = resolveSheets(workbook);
+      let allParsedRows: Omit<FacilityRow, 'id'>[] = [];
+      for (const { sheetName, ktxName } of sheetMappings) {
+        const sheet = workbook.Sheets[sheetName];
+        const parsed = parseSheetToRows(sheet, ktxName);
+        allParsedRows = allParsedRows.concat(parsed);
+      }
+      if (allParsedRows.length === 0) {
+        setImportResult({ success: false, message: `Không tìm thấy dữ liệu hợp lệ trong file. Kiểm tra lại file Excel (sheet: ${workbook.SheetNames.join(', ')}).`, inserted: 0, updated: 0 });
+        setImporting(false);
+        return;
+      }
+      const { data: existingData, error: fetchErr } = await supabase.from('facilities').select('id, ktx, day, phong_khu_vuc');
+      if (fetchErr) throw new Error(fetchErr.message);
+      const existingMap = new Map<string, string>();
+      (existingData || []).forEach((r: any) => existingMap.set(`${r.ktx}||${r.day}||${r.phong_khu_vuc}`, r.id));
+      const toInsert: Omit<FacilityRow, 'id'>[] = [];
+      const toUpdate: (Omit<FacilityRow, 'id'> & { id: string })[] = [];
+      allParsedRows.forEach(row => {
+        const key = `${row.ktx}||${row.day}||${row.phong_khu_vuc}`;
+        const existingId = existingMap.get(key);
+        if (existingId) toUpdate.push({ ...row, id: existingId });
+        else toInsert.push(row);
+      });
+      let insertedCount = 0, updatedCount = 0;
+      const errors: string[] = [];
+      if (toInsert.length > 0) {
+        for (let i = 0; i < toInsert.length; i += 50) {
+          const batch = toInsert.slice(i, i + 50);
+          const { error: insertErr } = await supabase.from('facilities').insert(batch);
+          if (insertErr) errors.push(`Insert error: ${insertErr.message}`);
+          else insertedCount += batch.length;
+        }
+      }
+      if (toUpdate.length > 0) {
+        for (const row of toUpdate) {
+          const { id, ...updateData } = row;
+          const { error: updateErr } = await supabase.from('facilities').update(updateData).eq('id', id);
+          if (updateErr) errors.push(`Update error (${row.day} - ${row.phong_khu_vuc}): ${updateErr.message}`);
+          else updatedCount++;
+        }
+      }
+      if (errors.length > 0) {
+        setImportResult({ success: false, message: `Có lỗi xảy ra: ${errors.slice(0, 2).join('; ')}`, inserted: insertedCount, updated: updatedCount });
+      } else {
+        setImportResult({ success: true, message: `Import thành công! Đã thêm ${insertedCount} dòng mới, cập nhật ${updatedCount} dòng.`, inserted: insertedCount, updated: updatedCount });
+      }
+      await fetchFacilities();
+    } catch (err: any) {
+      setImportResult({ success: false, message: `Lỗi đọc file: ${err.message}`, inserted: 0, updated: 0 });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // ─── Export Excel ─────────────────────────────────────────────────────────
+  const handleExportExcel = () => {
+    const exportData = sortedRows.map(r => ({
+      'KTX': r.ktx,
+      'Dãy': r.day,
+      'Phòng/Khu vực': r.phong_khu_vuc,
+      'Giường': r.giuong,
+      'Điều hòa': r.dieu_hoa,
+      'Tủ': r.tu,
+      'Quạt': r.quat,
+      'Ổ cắm điện': r.o_cam_dien,
+      'Remote': r.remote,
+      'Bóng tuýp': r.bong_tuyp,
+      'Bàn ăn': r.ban_an,
+      'Ghế ăn': r.ghe_an,
+      'Ghi chú': r.ghi_chu || '',
+    }));
+
+    // Add totals row
+    exportData.push({
+      'KTX': 'TỔNG CỘNG',
+      'Dãy': '',
+      'Phòng/Khu vực': `${filteredRows.length} phòng`,
+      'Giường': totals['giuong'] || 0,
+      'Điều hòa': totals['dieu_hoa'] || 0,
+      'Tủ': totals['tu'] || 0,
+      'Quạt': totals['quat'] || 0,
+      'Ổ cắm điện': totals['o_cam_dien'] || 0,
+      'Remote': totals['remote'] || 0,
+      'Bóng tuýp': totals['bong_tuyp'] || 0,
+      'Bàn ăn': totals['ban_an'] || 0,
+      'Ghế ăn': totals['ghe_an'] || 0,
+      'Ghi chú': '',
+    });
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Cơ sở vật chất');
+    const filterLabel = filterKtx ? `_${filterKtx.replace(' ', '')}` : '';
+    XLSX.writeFile(wb, `CSVC_KTX_HocMon${filterLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  // ─── Add row ──────────────────────────────────────────────────────────────
+  const handleAddRow = async (newRow: Omit<FacilityRow, 'id'>) => {
+    setAddingRow(true);
+    try {
+      const { data, error } = await supabase.from('facilities').insert({ ...newRow, ktx: activeKtx }).select().single();
+      if (error) console.error('Add row error:', error.message);
+      else if (data) {
+        setRows(prev => [...prev, data]);
+        setShowAddModal(false);
+      }
+    } catch (e: any) {
+      console.error('Add error:', e.message);
+    } finally {
+      setAddingRow(false);
+    }
+  };
+
+  // ─── Edit row ─────────────────────────────────────────────────────────────
   const startEdit = (row: FacilityRow) => {
     setEditingId(row.id);
-    setEditingRow({
-      id: row.id,
-      giuong: row.giuong,
-      dieu_hoa: row.dieu_hoa,
-      tu: row.tu,
-      quat: row.quat,
-      o_cam_dien: row.o_cam_dien,
-      remote: row.remote,
-      bong_tuyp: row.bong_tuyp,
-      ban_an: row.ban_an,
-      ghe_an: row.ghe_an,
-      ghi_chu: row.ghi_chu || '',
-    });
+    setEditingRow({ id: row.id, giuong: row.giuong, dieu_hoa: row.dieu_hoa, tu: row.tu, quat: row.quat, o_cam_dien: row.o_cam_dien, remote: row.remote, bong_tuyp: row.bong_tuyp, ban_an: row.ban_an, ghe_an: row.ghe_an, ghi_chu: row.ghi_chu || '' });
     setSaveError(null);
   };
 
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditingRow(null);
-    setSaveError(null);
-  };
+  const cancelEdit = () => { setEditingId(null); setEditingRow(null); setSaveError(null); };
 
   const saveEdit = async () => {
     if (!editingRow) return;
@@ -564,19 +550,11 @@ export default function FacilitiesClient() {
     setSaveError(null);
     try {
       const updatePayload: Record<string, number | string> = {};
-      NUMERIC_FIELDS.forEach(f => {
-        updatePayload[f as string] = Number(editingRow[f]) || 0;
-      });
+      NUMERIC_FIELDS.forEach(f => { updatePayload[f as string] = Number(editingRow[f]) || 0; });
       updatePayload['ghi_chu'] = editingRow.ghi_chu;
-
-      const { error } = await supabase
-        .from('facilities')
-        .update(updatePayload)
-        .eq('id', editingRow.id);
-
-      if (error) {
-        setSaveError(error.message);
-      } else {
+      const { error } = await supabase.from('facilities').update(updatePayload).eq('id', editingRow.id);
+      if (error) setSaveError(error.message);
+      else {
         setRows(prev => prev.map(r => r.id === editingRow.id ? { ...r, ...updatePayload } as FacilityRow : r));
         setEditingId(null);
         setEditingRow(null);
@@ -588,36 +566,26 @@ export default function FacilitiesClient() {
     }
   };
 
-  const handleAddRow = async () => {
-    if (!newRow.day.trim() || !newRow.phong_khu_vuc.trim()) return;
-    setAddingRow(true);
+  // ─── Delete row ───────────────────────────────────────────────────────────
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      const { data, error } = await supabase
-        .from('facilities')
-        .insert({ ...newRow, ktx: activeKtx })
-        .select()
-        .single();
-      if (error) {
-        console.error('Add row error:', error.message);
-      } else if (data) {
-        setRows(prev => [...prev, data]);
-        setNewRow({ ktx: activeKtx, day: '', phong_khu_vuc: '', giuong: 0, dieu_hoa: 0, tu: 0, quat: 0, o_cam_dien: 0, remote: 0, bong_tuyp: 0, ban_an: 0, ghe_an: 0, ghi_chu: '' });
-        setShowAddForm(false);
+      const { error } = await supabase.from('facilities').delete().eq('id', deleteTarget.id);
+      if (!error) {
+        setRows(prev => prev.filter(r => r.id !== deleteTarget.id));
+        setDeleteTarget(null);
       }
     } catch (e: any) {
-      console.error('Add error:', e.message);
+      console.error('Delete error:', e.message);
     } finally {
-      setAddingRow(false);
+      setDeleting(false);
     }
   };
 
   const handleSort = (field: keyof FacilityRow) => {
-    if (sortField === field) {
-      setSortAsc(prev => !prev);
-    } else {
-      setSortField(field);
-      setSortAsc(true);
-    }
+    if (sortField === field) setSortAsc(prev => !prev);
+    else { setSortField(field); setSortAsc(true); }
   };
 
   const SortIcon = ({ field }: { field: keyof FacilityRow }) => {
@@ -629,8 +597,28 @@ export default function FacilitiesClient() {
   const tdClass = "px-3 py-2 text-sm text-foreground whitespace-nowrap";
   const inputClass = "w-16 px-1.5 py-0.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary text-center";
 
+  const hasActiveFilters = filterKtx || filterDay || searchPhong.trim();
+
   return (
     <div className="p-4 md:p-6 space-y-5">
+      {/* Modals */}
+      {showAddModal && (
+        <AddRoomModal
+          activeKtx={activeKtx}
+          onSave={handleAddRow}
+          onClose={() => setShowAddModal(false)}
+          saving={addingRow}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          row={deleteTarget}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setDeleteTarget(null)}
+          deleting={deleting}
+        />
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -638,32 +626,29 @@ export default function FacilitiesClient() {
           <p className="text-sm text-muted-foreground mt-0.5">Theo dõi và cập nhật trang thiết bị từng phòng/khu vực</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Import Excel button */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={handleImportExcel}
-          />
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportExcel} />
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={importing}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition-colors"
           >
-            {importing ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Upload size={16} />
-            )}
+            {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
             {importing ? 'Đang import...' : 'Import Excel'}
           </button>
           <button
-            onClick={() => { setShowAddForm(v => !v); setNewRow(r => ({ ...r, ktx: activeKtx })); }}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+            onClick={handleExportExcel}
+            disabled={loading || sortedRows.length === 0}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors"
           >
-            <Plus size={16} />
-            Thêm phòng/khu vực
+            <Download size={15} />
+            Xuất Excel
+          </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <Plus size={15} />
+            Thêm phòng mới
           </button>
         </div>
       </div>
@@ -671,36 +656,21 @@ export default function FacilitiesClient() {
       {/* Import Result Banner */}
       {importResult && (
         <div className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${importResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-          {importResult.success ? (
-            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-600" />
-          ) : (
-            <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-500" />
-          )}
+          {importResult.success ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-600" /> : <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-500" />}
           <div className="flex-1">
             <p className="font-medium">{importResult.message}</p>
-            {importResult.success && (
-              <p className="text-xs mt-0.5 text-emerald-700">
-                Thêm mới: {importResult.inserted} dòng &nbsp;|&nbsp; Cập nhật: {importResult.updated} dòng
-              </p>
-            )}
+            {importResult.success && <p className="text-xs mt-0.5 text-emerald-700">Thêm mới: {importResult.inserted} dòng &nbsp;|&nbsp; Cập nhật: {importResult.updated} dòng</p>}
           </div>
-          <button onClick={() => setImportResult(null)} className="shrink-0 opacity-60 hover:opacity-100">
-            <X size={16} />
-          </button>
+          <button onClick={() => setImportResult(null)} className="shrink-0 opacity-60 hover:opacity-100"><X size={16} /></button>
         </div>
       )}
-
-      {/* Import Help Text */}
-      <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
-        <span className="font-medium">Hướng dẫn Import Excel:</span> Hỗ trợ file <code className="bg-muted px-1 rounded">.xlsx</code> có 1 hoặc nhiều sheet với tên bất kỳ (KTX 1, KTX 2, KTX1, KTX2, Ký Túc Xá 1...). Hàng tiêu đề được tự động nhận dạng qua từ khóa <strong>STT</strong> hoặc mặc định hàng 7. Các cột nhận dạng tự động: <em>STT, Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm điện, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
-      </div>
 
       {/* KTX Sub-tabs */}
       <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
         {(['KTX 1', 'KTX 2'] as const).map(ktx => (
           <button
             key={ktx}
-            onClick={() => { setActiveKtx(ktx); setEditingId(null); setEditingRow(null); setSearchQuery(''); }}
+            onClick={() => { setActiveKtx(ktx); setEditingId(null); setEditingRow(null); setFilterKtx(ktx); setFilterDay(''); setSearchPhong(''); }}
             className={`px-5 py-2 rounded-md text-sm font-semibold transition-all ${activeKtx === ktx ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
           >
             {ktx}
@@ -708,7 +678,49 @@ export default function FacilitiesClient() {
         ))}
       </div>
 
-      {/* Metrics */}
+      {/* Global Filters */}
+      <div className="flex flex-wrap gap-3 items-center">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Filter size={13} />
+          <span className="font-medium">Bộ lọc:</span>
+        </div>
+        <select
+          value={filterKtx}
+          onChange={e => { setFilterKtx(e.target.value); setFilterDay(''); if (e.target.value) setActiveKtx(e.target.value as 'KTX 1' | 'KTX 2'); }}
+          className="px-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+        >
+          <option value="">Tất cả KTX</option>
+          {allKtxOptions.map(k => <option key={k} value={k}>{k}</option>)}
+        </select>
+        <select
+          value={filterDay}
+          onChange={e => setFilterDay(e.target.value)}
+          className="px-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+        >
+          <option value="">Tất cả Dãy</option>
+          {allDayOptions.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Tìm phòng..."
+            value={searchPhong}
+            onChange={e => setSearchPhong(e.target.value)}
+            className="pl-8 pr-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 w-40"
+          />
+        </div>
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setFilterKtx(''); setFilterDay(''); setSearchPhong(''); }}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            <X size={12} /> Xóa lọc
+          </button>
+        )}
+      </div>
+
+      {/* Metrics — calculated from filtered rows */}
       {loading ? (
         <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
           {METRIC_CARDS.map(m => (
@@ -722,9 +734,7 @@ export default function FacilitiesClient() {
         <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
           {METRIC_CARDS.map(m => (
             <div key={m.key} className="bg-card border border-border rounded-xl p-3 flex flex-col gap-1.5">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${m.color}`}>
-                {m.icon}
-              </div>
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${m.color}`}>{m.icon}</div>
               <p className="text-xs text-muted-foreground leading-tight">{m.label}</p>
               <p className="text-lg font-bold text-foreground font-tabular">{(totals[m.key] || 0).toLocaleString()}</p>
             </div>
@@ -732,85 +742,29 @@ export default function FacilitiesClient() {
         </div>
       )}
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Tìm theo Dãy hoặc Phòng/Khu vực..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          className="w-full pl-9 pr-4 py-2 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-        />
-      </div>
-
-      {/* Add Form */}
-      {showAddForm && (
-        <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-foreground">Thêm phòng/khu vực mới — {activeKtx}</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Dãy *</label>
-              <input type="text" value={newRow.day} onChange={e => setNewRow(r => ({ ...r, day: e.target.value }))}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="Dãy A" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Phòng/Khu vực *</label>
-              <input type="text" value={newRow.phong_khu_vuc} onChange={e => setNewRow(r => ({ ...r, phong_khu_vuc: e.target.value }))}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="Phòng A101" />
-            </div>
-            {NUMERIC_FIELDS.map(f => (
-              <div key={f as string}>
-                <label className="text-xs text-muted-foreground mb-1 block capitalize">{METRIC_CARDS.find(m => m.key === f)?.label || f as string}</label>
-                <input type="number" min={0} value={(newRow as any)[f as string]} onChange={e => setNewRow(r => ({ ...r, [f as string]: Number(e.target.value) }))}
-                  className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary text-center" />
-              </div>
-            ))}
-            <div className="sm:col-span-2">
-              <label className="text-xs text-muted-foreground mb-1 block">Ghi chú</label>
-              <input type="text" value={newRow.ghi_chu} onChange={e => setNewRow(r => ({ ...r, ghi_chu: e.target.value }))}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" placeholder="Ghi chú..." />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleAddRow} disabled={addingRow || !newRow.day.trim() || !newRow.phong_khu_vuc.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
-              {addingRow ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-              Lưu
-            </button>
-            <button onClick={() => setShowAddForm(false)} className="px-4 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">
-              Hủy
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Table */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
           <span className="text-sm font-semibold text-foreground">
-            {activeKtx} — {sortedRows.length} phòng/khu vực
-            {searchQuery && <span className="ml-2 text-xs text-muted-foreground">(đang lọc)</span>}
+            {filterKtx || activeKtx} — {sortedRows.length} phòng/khu vực
+            {hasActiveFilters && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">đang lọc</span>}
           </span>
-          {saveError && (
-            <span className="text-xs text-red-500">{saveError}</span>
-          )}
+          {saveError && <span className="text-xs text-red-500">{saveError}</span>}
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 size={24} className="animate-spin text-primary" />
-          </div>
+          <div className="flex items-center justify-center py-16"><Loader2 size={24} className="animate-spin text-primary" /></div>
         ) : sortedRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Package size={40} className="mb-3 opacity-30" />
-            <p className="text-sm">{searchQuery ? 'Không tìm thấy kết quả phù hợp' : 'Chưa có dữ liệu cơ sở vật chất'}</p>
+            <p className="text-sm">{hasActiveFilters ? 'Không tìm thấy kết quả phù hợp' : 'Chưa có dữ liệu cơ sở vật chất'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1000px]">
               <thead className="bg-muted/50 border-b border-border">
                 <tr>
+                  <th className={thClass} onClick={() => handleSort('ktx')}>KTX <SortIcon field="ktx" /></th>
                   <th className={thClass} onClick={() => handleSort('day')}>Dãy <SortIcon field="day" /></th>
                   <th className={thClass} onClick={() => handleSort('phong_khu_vuc')}>Phòng/Khu vực <SortIcon field="phong_khu_vuc" /></th>
                   <th className={thClass} onClick={() => handleSort('giuong')}>Giường <SortIcon field="giuong" /></th>
@@ -831,28 +785,22 @@ export default function FacilitiesClient() {
                   const isEditing = editingId === row.id;
                   return (
                     <tr key={row.id} className={`transition-colors ${isEditing ? 'bg-primary/5' : 'hover:bg-muted/30'}`}>
+                      <td className={tdClass}><span className="text-xs bg-muted px-1.5 py-0.5 rounded font-medium">{row.ktx}</span></td>
                       <td className={tdClass}><span className="font-medium">{row.day}</span></td>
                       <td className={tdClass}>{row.phong_khu_vuc}</td>
                       {isEditing && editingRow ? (
                         <>
                           {NUMERIC_FIELDS.map(f => (
                             <td key={f as string} className="px-2 py-1.5">
-                              <input
-                                type="number"
-                                min={0}
-                                value={(editingRow as any)[f as string]}
+                              <input type="number" min={0} value={(editingRow as any)[f as string]}
                                 onChange={e => setEditingRow(r => r ? { ...r, [f as string]: Number(e.target.value) } : r)}
-                                className={inputClass}
-                              />
+                                className={inputClass} />
                             </td>
                           ))}
                           <td className="px-2 py-1.5">
-                            <input
-                              type="text"
-                              value={editingRow.ghi_chu}
+                            <input type="text" value={editingRow.ghi_chu}
                               onChange={e => setEditingRow(r => r ? { ...r, ghi_chu: e.target.value } : r)}
-                              className="w-28 px-1.5 py-0.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
+                              className="w-28 px-1.5 py-0.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
                           </td>
                           <td className="px-3 py-2 text-right">
                             <div className="flex items-center justify-end gap-1">
@@ -879,10 +827,16 @@ export default function FacilitiesClient() {
                           <td className={`${tdClass} text-center font-tabular`}>{row.ghe_an}</td>
                           <td className={`${tdClass} text-muted-foreground max-w-[120px] truncate`}>{row.ghi_chu || '—'}</td>
                           <td className="px-3 py-2 text-right">
-                            <button onClick={() => startEdit(row)}
-                              className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-                              <Edit2 size={14} />
-                            </button>
+                            <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => startEdit(row)}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" title="Sửa">
+                                <Edit2 size={14} />
+                              </button>
+                              <button onClick={() => setDeleteTarget(row)}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-600 transition-colors" title="Xóa">
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
                           </td>
                         </>
                       )}
@@ -890,10 +844,9 @@ export default function FacilitiesClient() {
                   );
                 })}
               </tbody>
-              {/* Totals row */}
               <tfoot className="bg-muted/60 border-t-2 border-border">
                 <tr>
-                  <td className="px-3 py-2.5 text-xs font-bold text-foreground" colSpan={2}>TỔNG CỘNG ({ktxRows.length} phòng)</td>
+                  <td className="px-3 py-2.5 text-xs font-bold text-foreground" colSpan={3}>TỔNG CỘNG ({filteredRows.length} phòng)</td>
                   {METRIC_CARDS.map(m => (
                     <td key={m.key} className="px-3 py-2.5 text-center text-sm font-bold text-foreground font-tabular">
                       {(totals[m.key] || 0).toLocaleString()}
@@ -905,6 +858,11 @@ export default function FacilitiesClient() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* Import Help */}
+      <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+        <span className="font-medium">Hướng dẫn Import Excel:</span> Hỗ trợ file <code className="bg-muted px-1 rounded">.xlsx</code> có 1 hoặc nhiều sheet với tên bất kỳ (KTX 1, KTX 2, KTX1, KTX2...). Hàng tiêu đề tự động nhận dạng qua từ khóa <strong>STT</strong>. Các cột nhận dạng tự động: <em>Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm điện, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
       </div>
     </div>
   );
