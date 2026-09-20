@@ -63,30 +63,60 @@ const METRIC_CARDS: MetricCard[] = [
 
 const NUMERIC_FIELDS: (keyof EditingRow)[] = ['giuong', 'dieu_hoa', 'tu', 'quat', 'o_cam_dien', 'remote', 'bong_tuyp', 'ban_an', 'ghe_an'];
 
-// Column name aliases mapping Excel headers → DB field names
-const COLUMN_MAP: Record<string, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {
+// ─── Excel column header → DB field mapping ───────────────────────────────────
+// Normalize: trim, lowercase, collapse whitespace, strip diacritics for fuzzy match
+function normalizeHeader(h: string): string {
+  return h
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+// Strip Vietnamese diacritics for loose matching
+function stripDiacritics(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
+function normalizeLoose(h: string): string {
+  return stripDiacritics(normalizeHeader(h));
+}
+
+type DbField = keyof Omit<FacilityRow, 'id' | 'ktx'>;
+
+// Map normalized (with diacritics) header → DB field
+const COLUMN_MAP_EXACT: Record<string, DbField> = {
+  // STT (row number — used for header detection only, not stored)
+  'stt': 'day', // placeholder; STT column is detected but not mapped to a field
+
   // Dãy
   'dãy': 'day', 'day': 'day', 'dây': 'day', 'dãy/khu': 'day',
   // Phòng/Khu vực
   'phòng': 'phong_khu_vuc', 'phòng/khu vực': 'phong_khu_vuc', 'khu vực': 'phong_khu_vuc',
   'phong': 'phong_khu_vuc', 'phong/khu vuc': 'phong_khu_vuc', 'khu vuc': 'phong_khu_vuc',
   'phòng/khu': 'phong_khu_vuc', 'phong khu vuc': 'phong_khu_vuc',
+  'phòng/khu vuc': 'phong_khu_vuc', 'phong/khu vực': 'phong_khu_vuc',
   // Giường
   'giường': 'giuong', 'giuong': 'giuong', 'số giường': 'giuong', 'so giuong': 'giuong',
   // Điều hòa
   'điều hòa': 'dieu_hoa', 'dieu hoa': 'dieu_hoa', 'điều hoà': 'dieu_hoa', 'ac': 'dieu_hoa',
+  'dieu hòa': 'dieu_hoa', 'điều hoa': 'dieu_hoa',
   // Tủ
   'tủ': 'tu', 'tu': 'tu', 'số tủ': 'tu',
   // Quạt
   'quạt': 'quat', 'quat': 'quat', 'số quạt': 'quat',
   // Ổ cắm
   'ổ cắm': 'o_cam_dien', 'o cam': 'o_cam_dien', 'ổ cắm điện': 'o_cam_dien', 'o cam dien': 'o_cam_dien',
-  'ổ điện': 'o_cam_dien', 'o dien': 'o_cam_dien',
+  'ổ điện': 'o_cam_dien', 'o dien': 'o_cam_dien', 'ổ cắm dien': 'o_cam_dien',
   // Remote
-  'remote': 'remote', 'điều khiển': 'remote', 'dieu khien': 'remote',
+  'remote': 'remote', 'điều khiển': 'remote', 'dieu khien': 'remote', 'điều khiên': 'remote',
   // Bóng tuýp
   'bóng tuýp': 'bong_tuyp', 'bong tuyp': 'bong_tuyp', 'bóng đèn': 'bong_tuyp', 'bong den': 'bong_tuyp',
-  'tuýp': 'bong_tuyp', 'tuyp': 'bong_tuyp',
+  'tuýp': 'bong_tuyp', 'tuyp': 'bong_tuyp', 'bóng tuyp': 'bong_tuyp', 'bong tuýp': 'bong_tuyp',
   // Bàn ăn
   'bàn ăn': 'ban_an', 'ban an': 'ban_an', 'bàn': 'ban_an',
   // Ghế ăn
@@ -95,47 +125,137 @@ const COLUMN_MAP: Record<string, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {
   'ghi chú': 'ghi_chu', 'ghi chu': 'ghi_chu', 'note': 'ghi_chu', 'notes': 'ghi_chu',
 };
 
-function normalizeHeader(h: string): string {
-  return h.toString().trim().toLowerCase().replace(/\s+/g, ' ');
+// Loose map (no diacritics) for fallback matching
+const COLUMN_MAP_LOOSE: Record<string, DbField> = {
+  'day': 'day', 'day/khu': 'day',
+  'phong': 'phong_khu_vuc', 'phong/khu vuc': 'phong_khu_vuc', 'khu vuc': 'phong_khu_vuc',
+  'phong/khu': 'phong_khu_vuc',
+  'giuong': 'giuong', 'so giuong': 'giuong',
+  'dieu hoa': 'dieu_hoa', 'ac': 'dieu_hoa',
+  'tu': 'tu', 'so tu': 'tu',
+  'quat': 'quat', 'so quat': 'quat',
+  'o cam': 'o_cam_dien', 'o cam dien': 'o_cam_dien', 'o dien': 'o_cam_dien',
+  'remote': 'remote', 'dieu khien': 'remote',
+  'bong tuyp': 'bong_tuyp', 'bong den': 'bong_tuyp', 'tuyp': 'bong_tuyp',
+  'ban an': 'ban_an', 'ban': 'ban_an',
+  'ghe an': 'ghe_an', 'ghe': 'ghe_an',
+  'ghi chu': 'ghi_chu', 'note': 'ghi_chu', 'notes': 'ghi_chu',
+};
+
+function resolveColumnField(rawHeader: string): DbField | 'stt' | null {
+  const norm = normalizeHeader(rawHeader);
+  const loose = normalizeLoose(rawHeader);
+
+  // STT detection (row number column — used only for header row detection)
+  if (norm === 'stt' || loose === 'stt') return 'stt';
+
+  // Exact match with diacritics
+  if (COLUMN_MAP_EXACT[norm]) return COLUMN_MAP_EXACT[norm];
+
+  // Loose match (no diacritics)
+  if (COLUMN_MAP_LOOSE[loose]) return COLUMN_MAP_LOOSE[loose];
+
+  // Partial / contains match for common keywords
+  if (loose.includes('giuong')) return 'giuong';
+  if (loose.includes('dieu hoa') || loose.includes('dieu hòa')) return 'dieu_hoa';
+  if (loose.includes('o cam')) return 'o_cam_dien';
+  if (loose.includes('bong tuyp') || loose.includes('bong den')) return 'bong_tuyp';
+  if (loose.includes('ban an')) return 'ban_an';
+  if (loose.includes('ghe an')) return 'ghe_an';
+  if (loose.includes('remote') || loose.includes('dieu khien')) return 'remote';
+  if (loose.includes('quat')) return 'quat';
+  if (loose.includes('phong') || loose.includes('khu vuc')) return 'phong_khu_vuc';
+
+  return null;
 }
 
+// ─── Determine KTX name from sheet name ───────────────────────────────────────
+function resolveKtxFromSheetName(sheetName: string): 'KTX 1' | 'KTX 2' | null {
+  const loose = normalizeLoose(sheetName).replace(/\s+/g, '');
+  // Contains "1" → KTX 1; contains "2" → KTX 2
+  if (/ktx.*1|1.*ktx|ktxtucxa1|kytuxa1|ktx1/.test(loose)) return 'KTX 1';
+  if (/ktx.*2|2.*ktx|ktxtucxa2|kytuxa2|ktx2/.test(loose)) return 'KTX 2';
+
+  // Broader: any sheet name containing "1" or "2" as the distinguishing digit
+  const norm = normalizeHeader(sheetName);
+  if (/\b1\b/.test(norm) || norm.endsWith('1') || norm.endsWith(' 1')) return 'KTX 1';
+  if (/\b2\b/.test(norm) || norm.endsWith('2') || norm.endsWith(' 2')) return 'KTX 2';
+
+  return null;
+}
+
+// ─── Core sheet parser ────────────────────────────────────────────────────────
+/**
+ * Parse a single worksheet into facility rows.
+ *
+ * Header detection strategy (in order):
+ *  1. Find the first row (within rows 1–10) that contains the keyword "STT"
+ *     → that row is the header row; data starts from the NEXT row.
+ *  2. If "STT" is not found, default to row 7 (index 6) as the header row
+ *     → data starts from row 8 (index 7).
+ *  3. Additionally scan the header row for all known column keywords and build
+ *     a column index → DB field map.
+ */
 function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<FacilityRow, 'id'>[] {
   const jsonData: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   if (!jsonData || jsonData.length < 2) return [];
 
-  // Find header row (search in first 8 rows to handle files with title/metadata rows)
-  let headerRowIdx = -1;
-  let headerMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
+  const SEARCH_LIMIT = Math.min(10, jsonData.length);
 
-  for (let i = 0; i < Math.min(8, jsonData.length); i++) {
+  let headerRowIdx = -1;
+  let headerMap: Record<number, DbField> = {};
+
+  // ── Step 1: Find row containing "STT" ──
+  for (let i = 0; i < SEARCH_LIMIT; i++) {
     const row = jsonData[i];
-    const tempMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
-    let matchCount = 0;
-    row.forEach((cell: any, colIdx: number) => {
-      const normalized = normalizeHeader(String(cell || ''));
-      if (COLUMN_MAP[normalized]) {
-        tempMap[colIdx] = COLUMN_MAP[normalized];
-        matchCount++;
-      }
+    const hasStt = row.some((cell: any) => {
+      const n = normalizeHeader(String(cell ?? ''));
+      return n === 'stt';
     });
-    if (matchCount >= 2) {
+    if (hasStt) {
       headerRowIdx = i;
-      headerMap = tempMap;
       break;
     }
   }
 
-  if (headerRowIdx === -1 || Object.keys(headerMap).length === 0) return [];
+  // ── Step 2: Fallback — find row with most column matches ──
+  if (headerRowIdx === -1) {
+    let bestMatchCount = 0;
+    for (let i = 0; i < SEARCH_LIMIT; i++) {
+      const row = jsonData[i];
+      let matchCount = 0;
+      row.forEach((cell: any) => {
+        const field = resolveColumnField(String(cell ?? ''));
+        if (field && field !== 'stt') matchCount++;
+      });
+      if (matchCount > bestMatchCount) {
+        bestMatchCount = matchCount;
+        headerRowIdx = i;
+      }
+    }
+    // If still no good match found (0 or 1 column), default to row 7 (index 6)
+    if (bestMatchCount < 2) {
+      headerRowIdx = Math.min(6, jsonData.length - 1);
+    }
+  }
 
-  // Data starts from row 6 (index 5) per file format requirement.
-  // If the header row is found before index 5, still start data from index 5.
-  const dataStartIdx = Math.max(headerRowIdx + 1, 5);
+  // ── Step 3: Build column map from the detected header row ──
+  const headerRow = jsonData[headerRowIdx] || [];
+  headerRow.forEach((cell: any, colIdx: number) => {
+    const field = resolveColumnField(String(cell ?? ''));
+    if (field && field !== 'stt') {
+      headerMap[colIdx] = field as DbField;
+    }
+  });
+
+  // Data starts immediately after the header row
+  const dataStartIdx = headerRowIdx + 1;
 
   const results: Omit<FacilityRow, 'id'>[] = [];
 
   for (let i = dataStartIdx; i < jsonData.length; i++) {
     const row = jsonData[i];
-    if (!row || row.every((c: any) => !c && c !== 0)) continue; // skip empty rows
+    if (!row || row.every((c: any) => c === '' || c === null || c === undefined)) continue;
 
     const record: Omit<FacilityRow, 'id'> = {
       ktx: ktxName,
@@ -159,11 +279,12 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
       if (field === 'day' || field === 'phong_khu_vuc' || field === 'ghi_chu') {
         (record as any)[field] = String(cellVal ?? '').trim();
       } else {
-        (record as any)[field] = Number(cellVal) || 0;
+        const num = Number(cellVal);
+        (record as any)[field] = isNaN(num) ? 0 : num;
       }
     });
 
-    // Skip rows without a room identifier
+    // Skip rows without any room identifier
     if (!record.day && !record.phong_khu_vuc) continue;
 
     results.push(record);
@@ -172,6 +293,42 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
   return results;
 }
 
+// ─── Determine which KTX a sheet belongs to ───────────────────────────────────
+/**
+ * For multi-sheet files: map each sheet to KTX 1 or KTX 2 by name.
+ * For single-sheet files: assign KTX 1 by default (user can re-import for KTX 2).
+ * Returns array of { sheetName, ktxName } pairs to process.
+ */
+function resolveSheets(workbook: XLSX.WorkBook): { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] {
+  const sheets = workbook.SheetNames;
+
+  if (sheets.length === 1) {
+    // Single-sheet file: try to detect KTX from sheet name, default to KTX 1
+    const ktx = resolveKtxFromSheetName(sheets[0]) ?? 'KTX 1';
+    return [{ sheetName: sheets[0], ktxName: ktx }];
+  }
+
+  // Multi-sheet: map each sheet by name
+  const result: { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] = [];
+  for (const sheetName of sheets) {
+    const ktx = resolveKtxFromSheetName(sheetName);
+    if (ktx) {
+      result.push({ sheetName, ktxName: ktx });
+    }
+  }
+
+  // If no sheets matched by name but there are exactly 2 sheets, assign KTX 1 and KTX 2 in order
+  if (result.length === 0 && sheets.length >= 2) {
+    result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
+    result.push({ sheetName: sheets[1], ktxName: 'KTX 2' });
+  } else if (result.length === 0 && sheets.length === 1) {
+    result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
+  }
+
+  return result;
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 export default function FacilitiesClient() {
   const [activeKtx, setActiveKtx] = useState<'KTX 1' | 'KTX 2'>('KTX 1');
   const [rows, setRows] = useState<FacilityRow[]>([]);
@@ -235,45 +392,26 @@ export default function FacilitiesClient() {
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
-      const KTX_SHEET_NAMES: Record<string, string> = {
-        // KTX 1 variants
-        'ktx 1': 'KTX 1',
-        'ktx1': 'KTX 1',
-        'ký túc xá 1': 'KTX 1',
-        'ky tuc xa 1': 'KTX 1',
-        'kỹ túc xá 1': 'KTX 1',
-        'ký tuc xá 1': 'KTX 1',
-        'ky túc xá 1': 'KTX 1',
-        'ký túc xa 1': 'KTX 1',
-        'ktx1 ': 'KTX 1',
-        // KTX 2 variants
-        'ktx 2': 'KTX 2',
-        'ktx2': 'KTX 2',
-        'ký túc xá 2': 'KTX 2',
-        'ky tuc xa 2': 'KTX 2',
-        'kỹ túc xá 2': 'KTX 2',
-        'ký tuc xá 2': 'KTX 2',
-        'ky túc xá 2': 'KTX 2',
-        'ký túc xa 2': 'KTX 2',
-        'ktx2 ': 'KTX 2',
-      };
+      // Resolve which sheets map to which KTX
+      const sheetMappings = resolveSheets(workbook);
 
       let allParsedRows: Omit<FacilityRow, 'id'>[] = [];
+      const sheetLog: string[] = [];
 
-      for (const sheetName of workbook.SheetNames) {
-        const normalizedSheet = sheetName.trim().toLowerCase();
-        const ktxName = KTX_SHEET_NAMES[normalizedSheet];
-        if (!ktxName) continue; // skip sheets that don't match KTX 1 or KTX 2
-
+      for (const { sheetName, ktxName } of sheetMappings) {
         const sheet = workbook.Sheets[sheetName];
         const parsed = parseSheetToRows(sheet, ktxName);
+        sheetLog.push(`"${sheetName}" → ${ktxName}: ${parsed.length} dòng`);
         allParsedRows = allParsedRows.concat(parsed);
       }
+
+      console.log('[Import] Sheet mapping:', sheetLog.join(', '));
+      console.log('[Import] Total parsed rows:', allParsedRows.length);
 
       if (allParsedRows.length === 0) {
         setImportResult({
           success: false,
-          message: 'Không tìm thấy dữ liệu hợp lệ. Đảm bảo file có sheet tên "KTX 1" và/hoặc "KTX 2" với các cột đúng định dạng.',
+          message: `Không tìm thấy dữ liệu hợp lệ trong file. Kiểm tra lại file Excel (sheet: ${workbook.SheetNames.join(', ')}).`,
           inserted: 0,
           updated: 0,
         });
@@ -281,9 +419,7 @@ export default function FacilitiesClient() {
         return;
       }
 
-      // Upsert: match on (ktx, day, phong_khu_vuc)
-      // Supabase upsert requires a unique constraint — we'll do it in batches
-      // First fetch existing rows to determine insert vs update
+      // Fetch existing rows to determine insert vs update
       const { data: existingData, error: fetchErr } = await supabase
         .from('facilities')
         .select('id, ktx, day, phong_khu_vuc');
@@ -326,7 +462,7 @@ export default function FacilitiesClient() {
         }
       }
 
-      // Update existing rows in batches
+      // Update existing rows
       if (toUpdate.length > 0) {
         for (const row of toUpdate) {
           const { id, ...updateData } = row;
@@ -358,7 +494,7 @@ export default function FacilitiesClient() {
         });
       }
 
-      // Reload data to refresh UI and metrics
+      // Reload all data to refresh UI and metrics
       await fetchFacilities();
 
     } catch (err: any) {
@@ -392,6 +528,7 @@ export default function FacilitiesClient() {
     return sortAsc ? as.localeCompare(bs) : bs.localeCompare(as);
   });
 
+  // Totals calculated from ALL rows for the active KTX (not just filtered)
   const totals = ktxRows.reduce((acc, r) => {
     METRIC_CARDS.forEach(m => { acc[m.key] = (acc[m.key] || 0) + (r[m.key] || 0); });
     return acc;
@@ -555,7 +692,7 @@ export default function FacilitiesClient() {
 
       {/* Import Help Text */}
       <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
-        <span className="font-medium">Hướng dẫn Import Excel:</span> File <code className="bg-muted px-1 rounded">.xlsx</code> cần có sheet tên <strong>KTX 1</strong> và/hoặc <strong>KTX 2</strong>. Các cột được nhận dạng tự động: <em>Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
+        <span className="font-medium">Hướng dẫn Import Excel:</span> Hỗ trợ file <code className="bg-muted px-1 rounded">.xlsx</code> có 1 hoặc nhiều sheet với tên bất kỳ (KTX 1, KTX 2, KTX1, KTX2, Ký Túc Xá 1...). Hàng tiêu đề được tự động nhận dạng qua từ khóa <strong>STT</strong> hoặc mặc định hàng 7. Các cột nhận dạng tự động: <em>STT, Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm điện, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
       </div>
 
       {/* KTX Sub-tabs */}
