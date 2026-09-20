@@ -1,7 +1,8 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Search, Edit2, Check, X, Plus, Loader2, BedDouble, Wind, Package, Fan, Zap, Tv, Lightbulb, UtensilsCrossed, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, Edit2, Check, X, Plus, Loader2, BedDouble, Wind, Package, Fan, Zap, Tv, Lightbulb, UtensilsCrossed, ChevronDown, ChevronUp, Upload, AlertCircle, CheckCircle2 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 interface FacilityRow {
   id: string;
@@ -41,6 +42,13 @@ interface MetricCard {
   color: string;
 }
 
+interface ImportResult {
+  success: boolean;
+  message: string;
+  inserted: number;
+  updated: number;
+}
+
 const METRIC_CARDS: MetricCard[] = [
   { label: 'Giường', key: 'giuong', icon: <BedDouble size={18} />, color: 'text-blue-600 bg-blue-50' },
   { label: 'Điều hòa', key: 'dieu_hoa', icon: <Wind size={18} />, color: 'text-cyan-600 bg-cyan-50' },
@@ -54,6 +62,111 @@ const METRIC_CARDS: MetricCard[] = [
 ];
 
 const NUMERIC_FIELDS: (keyof EditingRow)[] = ['giuong', 'dieu_hoa', 'tu', 'quat', 'o_cam_dien', 'remote', 'bong_tuyp', 'ban_an', 'ghe_an'];
+
+// Column name aliases mapping Excel headers → DB field names
+const COLUMN_MAP: Record<string, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {
+  // Dãy
+  'dãy': 'day', 'day': 'day', 'dây': 'day', 'dãy/khu': 'day',
+  // Phòng/Khu vực
+  'phòng': 'phong_khu_vuc', 'phòng/khu vực': 'phong_khu_vuc', 'khu vực': 'phong_khu_vuc',
+  'phong': 'phong_khu_vuc', 'phong/khu vuc': 'phong_khu_vuc', 'khu vuc': 'phong_khu_vuc',
+  'phòng/khu': 'phong_khu_vuc', 'phong khu vuc': 'phong_khu_vuc',
+  // Giường
+  'giường': 'giuong', 'giuong': 'giuong', 'số giường': 'giuong', 'so giuong': 'giuong',
+  // Điều hòa
+  'điều hòa': 'dieu_hoa', 'dieu hoa': 'dieu_hoa', 'điều hoà': 'dieu_hoa', 'ac': 'dieu_hoa',
+  // Tủ
+  'tủ': 'tu', 'tu': 'tu', 'số tủ': 'tu',
+  // Quạt
+  'quạt': 'quat', 'quat': 'quat', 'số quạt': 'quat',
+  // Ổ cắm
+  'ổ cắm': 'o_cam_dien', 'o cam': 'o_cam_dien', 'ổ cắm điện': 'o_cam_dien', 'o cam dien': 'o_cam_dien',
+  'ổ điện': 'o_cam_dien', 'o dien': 'o_cam_dien',
+  // Remote
+  'remote': 'remote', 'điều khiển': 'remote', 'dieu khien': 'remote',
+  // Bóng tuýp
+  'bóng tuýp': 'bong_tuyp', 'bong tuyp': 'bong_tuyp', 'bóng đèn': 'bong_tuyp', 'bong den': 'bong_tuyp',
+  'tuýp': 'bong_tuyp', 'tuyp': 'bong_tuyp',
+  // Bàn ăn
+  'bàn ăn': 'ban_an', 'ban an': 'ban_an', 'bàn': 'ban_an',
+  // Ghế ăn
+  'ghế ăn': 'ghe_an', 'ghe an': 'ghe_an', 'ghế': 'ghe_an',
+  // Ghi chú
+  'ghi chú': 'ghi_chu', 'ghi chu': 'ghi_chu', 'note': 'ghi_chu', 'notes': 'ghi_chu',
+};
+
+function normalizeHeader(h: string): string {
+  return h.toString().trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<FacilityRow, 'id'>[] {
+  const jsonData: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!jsonData || jsonData.length < 2) return [];
+
+  // Find header row (first row with recognizable column names)
+  let headerRowIdx = 0;
+  let headerMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
+
+  for (let i = 0; i < Math.min(5, jsonData.length); i++) {
+    const row = jsonData[i];
+    const tempMap: Record<number, keyof Omit<FacilityRow, 'id' | 'ktx'>> = {};
+    let matchCount = 0;
+    row.forEach((cell: any, colIdx: number) => {
+      const normalized = normalizeHeader(String(cell || ''));
+      if (COLUMN_MAP[normalized]) {
+        tempMap[colIdx] = COLUMN_MAP[normalized];
+        matchCount++;
+      }
+    });
+    if (matchCount >= 2) {
+      headerRowIdx = i;
+      headerMap = tempMap;
+      break;
+    }
+  }
+
+  if (Object.keys(headerMap).length === 0) return [];
+
+  const results: Omit<FacilityRow, 'id'>[] = [];
+
+  for (let i = headerRowIdx + 1; i < jsonData.length; i++) {
+    const row = jsonData[i];
+    if (!row || row.every((c: any) => !c && c !== 0)) continue; // skip empty rows
+
+    const record: Omit<FacilityRow, 'id'> = {
+      ktx: ktxName,
+      day: '',
+      phong_khu_vuc: '',
+      giuong: 0,
+      dieu_hoa: 0,
+      tu: 0,
+      quat: 0,
+      o_cam_dien: 0,
+      remote: 0,
+      bong_tuyp: 0,
+      ban_an: 0,
+      ghe_an: 0,
+      ghi_chu: '',
+    };
+
+    Object.entries(headerMap).forEach(([colIdxStr, field]) => {
+      const colIdx = Number(colIdxStr);
+      const cellVal = row[colIdx];
+      if (field === 'day' || field === 'phong_khu_vuc' || field === 'ghi_chu') {
+        (record as any)[field] = String(cellVal ?? '').trim();
+      } else {
+        (record as any)[field] = Number(cellVal) || 0;
+      }
+    });
+
+    // Skip rows without a room identifier
+    if (!record.day && !record.phong_khu_vuc) continue;
+
+    results.push(record);
+  }
+
+  return results;
+}
 
 export default function FacilitiesClient() {
   const [activeKtx, setActiveKtx] = useState<'KTX 1' | 'KTX 2'>('KTX 1');
@@ -72,6 +185,11 @@ export default function FacilitiesClient() {
   const [addingRow, setAddingRow] = useState(false);
   const [sortField, setSortField] = useState<keyof FacilityRow>('day');
   const [sortAsc, setSortAsc] = useState(true);
+
+  // Import Excel state
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const supabase = createClient();
 
@@ -98,6 +216,144 @@ export default function FacilitiesClient() {
   useEffect(() => {
     fetchFacilities();
   }, [fetchFacilities]);
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset file input so same file can be re-imported
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+
+      const KTX_SHEET_NAMES: Record<string, string> = {
+        'ktx 1': 'KTX 1',
+        'ktx1': 'KTX 1',
+        'ký túc xá 1': 'KTX 1',
+        'ktx 2': 'KTX 2',
+        'ktx2': 'KTX 2',
+        'ký túc xá 2': 'KTX 2',
+      };
+
+      let allParsedRows: Omit<FacilityRow, 'id'>[] = [];
+
+      for (const sheetName of workbook.SheetNames) {
+        const normalizedSheet = sheetName.trim().toLowerCase();
+        const ktxName = KTX_SHEET_NAMES[normalizedSheet];
+        if (!ktxName) continue; // skip sheets that don't match KTX 1 or KTX 2
+
+        const sheet = workbook.Sheets[sheetName];
+        const parsed = parseSheetToRows(sheet, ktxName);
+        allParsedRows = allParsedRows.concat(parsed);
+      }
+
+      if (allParsedRows.length === 0) {
+        setImportResult({
+          success: false,
+          message: 'Không tìm thấy dữ liệu hợp lệ. Đảm bảo file có sheet tên "KTX 1" và/hoặc "KTX 2" với các cột đúng định dạng.',
+          inserted: 0,
+          updated: 0,
+        });
+        setImporting(false);
+        return;
+      }
+
+      // Upsert: match on (ktx, day, phong_khu_vuc)
+      // Supabase upsert requires a unique constraint — we'll do it in batches
+      // First fetch existing rows to determine insert vs update
+      const { data: existingData, error: fetchErr } = await supabase
+        .from('facilities')
+        .select('id, ktx, day, phong_khu_vuc');
+
+      if (fetchErr) throw new Error(fetchErr.message);
+
+      const existingMap = new Map<string, string>();
+      (existingData || []).forEach((r: any) => {
+        const key = `${r.ktx}||${r.day}||${r.phong_khu_vuc}`;
+        existingMap.set(key, r.id);
+      });
+
+      const toInsert: Omit<FacilityRow, 'id'>[] = [];
+      const toUpdate: (Omit<FacilityRow, 'id'> & { id: string })[] = [];
+
+      allParsedRows.forEach(row => {
+        const key = `${row.ktx}||${row.day}||${row.phong_khu_vuc}`;
+        const existingId = existingMap.get(key);
+        if (existingId) {
+          toUpdate.push({ ...row, id: existingId });
+        } else {
+          toInsert.push(row);
+        }
+      });
+
+      let insertedCount = 0;
+      let updatedCount = 0;
+      const errors: string[] = [];
+
+      // Insert new rows in batches of 50
+      if (toInsert.length > 0) {
+        for (let i = 0; i < toInsert.length; i += 50) {
+          const batch = toInsert.slice(i, i + 50);
+          const { error: insertErr } = await supabase.from('facilities').insert(batch);
+          if (insertErr) {
+            errors.push(`Insert error: ${insertErr.message}`);
+          } else {
+            insertedCount += batch.length;
+          }
+        }
+      }
+
+      // Update existing rows in batches
+      if (toUpdate.length > 0) {
+        for (const row of toUpdate) {
+          const { id, ...updateData } = row;
+          const { error: updateErr } = await supabase
+            .from('facilities')
+            .update(updateData)
+            .eq('id', id);
+          if (updateErr) {
+            errors.push(`Update error (${row.day} - ${row.phong_khu_vuc}): ${updateErr.message}`);
+          } else {
+            updatedCount++;
+          }
+        }
+      }
+
+      if (errors.length > 0) {
+        setImportResult({
+          success: false,
+          message: `Có lỗi xảy ra: ${errors.slice(0, 2).join('; ')}`,
+          inserted: insertedCount,
+          updated: updatedCount,
+        });
+      } else {
+        setImportResult({
+          success: true,
+          message: `Import thành công! Đã thêm ${insertedCount} dòng mới, cập nhật ${updatedCount} dòng.`,
+          inserted: insertedCount,
+          updated: updatedCount,
+        });
+      }
+
+      // Reload data to refresh UI and metrics
+      await fetchFacilities();
+
+    } catch (err: any) {
+      setImportResult({
+        success: false,
+        message: `Lỗi đọc file: ${err.message}`,
+        inserted: 0,
+        updated: 0,
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const ktxRows = rows.filter(r => r.ktx === activeKtx);
 
@@ -226,13 +482,62 @@ export default function FacilitiesClient() {
           <h1 className="text-xl font-bold text-foreground">Quản lý Cơ sở vật chất</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Theo dõi và cập nhật trang thiết bị từng phòng/khu vực</p>
         </div>
-        <button
-          onClick={() => { setShowAddForm(v => !v); setNewRow(r => ({ ...r, ktx: activeKtx })); }}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          <Plus size={16} />
-          Thêm phòng/khu vực
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Import Excel button */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={handleImportExcel}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+          >
+            {importing ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Upload size={16} />
+            )}
+            {importing ? 'Đang import...' : 'Import Excel'}
+          </button>
+          <button
+            onClick={() => { setShowAddForm(v => !v); setNewRow(r => ({ ...r, ktx: activeKtx })); }}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <Plus size={16} />
+            Thêm phòng/khu vực
+          </button>
+        </div>
+      </div>
+
+      {/* Import Result Banner */}
+      {importResult && (
+        <div className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${importResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+          {importResult.success ? (
+            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-600" />
+          ) : (
+            <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-500" />
+          )}
+          <div className="flex-1">
+            <p className="font-medium">{importResult.message}</p>
+            {importResult.success && (
+              <p className="text-xs mt-0.5 text-emerald-700">
+                Thêm mới: {importResult.inserted} dòng &nbsp;|&nbsp; Cập nhật: {importResult.updated} dòng
+              </p>
+            )}
+          </div>
+          <button onClick={() => setImportResult(null)} className="shrink-0 opacity-60 hover:opacity-100">
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Import Help Text */}
+      <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+        <span className="font-medium">Hướng dẫn Import Excel:</span> File <code className="bg-muted px-1 rounded">.xlsx</code> cần có sheet tên <strong>KTX 1</strong> và/hoặc <strong>KTX 2</strong>. Các cột được nhận dạng tự động: <em>Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
       </div>
 
       {/* KTX Sub-tabs */}
