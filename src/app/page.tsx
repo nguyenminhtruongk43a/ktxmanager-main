@@ -307,6 +307,9 @@ export default function OccupancyDashboardPage() {
       });
   }, []);
 
+  // Track workers length to trigger stats re-fetch when data changes
+  const workersLength = workers.length;
+
   useEffect(() => {
     let active = true;
     const fetchStats = async () => {
@@ -354,7 +357,7 @@ export default function OccupancyDashboardPage() {
 
           // "Nam", "NAM", "nam" → "nam"; "Nữ", "NỮ", "nu", "nư", "nữ" → "nu"
           const isMale = gNorm === 'nam';
-          const isFemale = gNorm === 'nu' || gNorm === 'nu' || (!isMale && (gNorm.startsWith('n') && gNorm.length <= 3));
+          const isFemale = !isMale && (gNorm === 'nu' || gNorm === 'n' || (gNorm.startsWith('n') && gNorm.length <= 3 && gNorm !== 'nam'));
 
           if (isMale) maleCount++;
           else if (isFemale) femaleCount++;
@@ -417,7 +420,7 @@ export default function OccupancyDashboardPage() {
     };
     fetchStats();
     return () => { active = false; };
-  }, []);
+  }, [workersLength]); // Re-fetch stats whenever workers count changes (e.g. after Excel import)
 
   // ── KPI calculations scoped to selected KTX ───────────────────────────────
   // All-KTX metrics
