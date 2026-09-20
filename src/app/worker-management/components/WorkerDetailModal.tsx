@@ -84,6 +84,14 @@ export default function WorkerDetailModal({ worker: w, onClose, onEdit, onDelete
               <DetailRow label="Số điện thoại" value={w.soDienThoai} icon={Phone} mono />
               <DetailRow label="CCCD" value={w.cccd} icon={CreditCard} mono />
               <DetailRow label="Hộ khẩu Tỉnh/TP" value={w.hoKhauTinh} icon={MapPin} />
+              {w.avatar && (
+                <div className="py-2.5 border-b border-border">
+                  <p className="text-xs text-muted-foreground font-medium mb-1.5">Ảnh CCCD</p>
+                  <a href={w.avatar} target="_blank" rel="noopener noreferrer">
+                    <img src={w.avatar} alt={`Ảnh CCCD của ${w.hoVaTen}`} className="w-full max-w-[180px] rounded-lg border border-border object-cover hover:opacity-90 transition-opacity cursor-pointer" />
+                  </a>
+                </div>
+              )}
             </div>
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1 mt-2">Thông tin KTX</p>
