@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
-import { LayoutDashboard, Users, ChevronLeft, ChevronRight, LogOut, BarChart2, ClipboardList, UserCog, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Users, ChevronLeft, ChevronRight, LogOut, BarChart2, ClipboardList, UserCog, RefreshCw, Building2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useWorkers } from '@/context/WorkerContext';
 import Icon from '@/components/ui/AppIcon';
@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'nav-dashboard', label: 'Tổng Quan', href: '/', icon: LayoutDashboard },
   { id: 'nav-report', label: 'Báo Cáo Biến Động', href: '/report-dashboard', icon: BarChart2 },
   { id: 'nav-workers', label: 'Quản Lý Công Nhân', href: '/worker-management', icon: Users, dynamicBadge: true },
+  { id: 'nav-facilities', label: 'Quản lý Cơ sở vật chất', href: '/facilities', icon: Building2 },
   { id: 'nav-user-mgmt', label: 'Quản Lý Tài Khoản', href: '/user-management', icon: UserCog, adminOnly: true },
   { id: 'nav-audit', label: 'Nhật Ký Hệ Thống', href: '/audit-log', icon: ClipboardList, adminOnly: true },
 ];
