@@ -16,6 +16,7 @@ interface AuditContextValue {
   logs: AuditEntry[];
   addLog: (account: string, action: AuditAction, detail: string) => void;
   loading: boolean;
+  refetchLogs: () => Promise<void>;
 }
 
 const AuditContext = createContext<AuditContextValue | null>(null);
@@ -25,32 +26,47 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
 
-  // Load all logs from Supabase on mount
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('audit_logs')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(500);
+      if (!error && data) {
+        setLogs(data.map(row => ({
+          id: row.id,
+          timestamp: row.timestamp,
+          account: row.account,
+          action: row.action as AuditAction,
+          detail: row.detail,
+        })));
+      }
+    } catch {}
+    setLoading(false);
+  }, [supabase]);
+
+  // Initial fetch on mount
   useEffect(() => {
-    let mounted = true;
-    async function fetchLogs() {
-      try {
-        const { data, error } = await supabase
-          .from('audit_logs')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .limit(500);
-        if (!mounted) return;
-        if (!error && data) {
-          setLogs(data.map(row => ({
-            id: row.id,
-            timestamp: row.timestamp,
-            account: row.account,
-            action: row.action as AuditAction,
-            detail: row.detail,
-          })));
-        }
-      } catch {}
-      if (mounted) setLoading(false);
-    }
     fetchLogs();
-    return () => { mounted = false; };
-  }, []);
+  }, [fetchLogs]);
+
+  // Re-fetch whenever the auth session is established or refreshed so every
+  // admin account always sees the full shared log (not the empty snapshot
+  // captured before the session token was ready).
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        fetchLogs();
+      }
+      if (event === 'SIGNED_OUT') {
+        setLogs([]);
+        setLoading(false);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase, fetchLogs]);
 
   const addLog = useCallback(async (account: string, action: AuditAction, detail: string) => {
     const entry: AuditEntry = {
@@ -73,7 +89,7 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
   }, [supabase]);
 
   return (
-    <AuditContext.Provider value={{ logs, addLog, loading }}>
+    <AuditContext.Provider value={{ logs, addLog, loading, refetchLogs: fetchLogs }}>
       {children}
     </AuditContext.Provider>
   );
