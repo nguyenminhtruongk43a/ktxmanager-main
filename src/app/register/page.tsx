@@ -419,8 +419,19 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.ho_va_ten.trim() || !form.so_cccd.trim() || !form.so_dien_thoai.trim()) {
-      setError('Vui lòng điền đầy đủ họ tên, CCCD và số điện thoại.');
+    // Required field validation
+    const missing: string[] = [];
+    if (!form.ngay_sinh.trim()) missing.push('Ngày sinh');
+    if (!form.gioi_tinh.trim()) missing.push('Giới tính');
+    if (!form.ho_khau_tinh.trim()) missing.push('Địa chỉ thường trú / Hộ khẩu');
+    if (!form.ktx.trim()) missing.push('Khu KTX');
+    if (!form.day.trim()) missing.push('Dãy nhà');
+    if (!form.phong_so.trim()) missing.push('Phòng số');
+    if (!form.ho_va_ten.trim()) missing.push('Họ và tên');
+    if (!form.so_cccd.trim()) missing.push('Số CCCD');
+    if (!form.so_dien_thoai.trim()) missing.push('Số điện thoại');
+    if (missing.length > 0) {
+      setError(`Vui lòng điền đầy đủ các trường bắt buộc: ${missing.join(', ')}.`);
       return;
     }
     setSubmitting(true);
@@ -527,9 +538,9 @@ export default function RegisterPage() {
                   <input type="text" value={form.ma_nv} onChange={handleField('ma_nv')} placeholder="NV001 hoặc để trống" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Giới tính</label>
+                  <label className={labelCls}>Giới tính <span className="text-red-500">*</span></label>
                   <select value={form.gioi_tinh} onChange={handleField('gioi_tinh')} className={inputCls}>
-                    <option value="">Chọn</option>
+                    <option value="">-- Chọn giới tính --</option>
                     <option value="Nam">Nam</option>
                     <option value="Nữ">Nữ</option>
                   </select>
@@ -543,7 +554,7 @@ export default function RegisterPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={labelCls}>Ngày sinh</label>
+                  <label className={labelCls}>Ngày sinh <span className="text-red-500">*</span></label>
                   <input type="text" value={form.ngay_sinh} onChange={handleField('ngay_sinh')} placeholder="VD: 15/06/1990" className={inputCls} />
                 </div>
                 <div>
@@ -558,7 +569,7 @@ export default function RegisterPage() {
               </div>
 
               <div>
-                <label className={labelCls}>Địa chỉ thường trú / Hộ khẩu</label>
+                <label className={labelCls}>Địa chỉ thường trú / Hộ khẩu <span className="text-red-500">*</span></label>
                 <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')} placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" className={inputCls} />
               </div>
             </div>
@@ -571,7 +582,7 @@ export default function RegisterPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={labelCls}>Khu KTX</label>
+                  <label className={labelCls}>Khu KTX <span className="text-red-500">*</span></label>
                   <input type="text" value={form.ktx} onChange={handleField('ktx')} placeholder="VD: KTX 1, KTX 2..." list="ktx-list" className={inputCls} />
                   <datalist id="ktx-list">
                     <option value="KTX 1" /><option value="KTX 2" /><option value="KTX 3" /><option value="KTX 4" /><option value="KTX 5" />
@@ -585,11 +596,11 @@ export default function RegisterPage() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className={labelCls}>Dãy nhà</label>
+                  <label className={labelCls}>Dãy nhà <span className="text-red-500">*</span></label>
                   <input type="text" value={form.day} onChange={handleField('day')} placeholder="Dãy 3" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Phòng số</label>
+                  <label className={labelCls}>Phòng số <span className="text-red-500">*</span></label>
                   <input type="text" value={form.phong_so} onChange={handleField('phong_so')} placeholder="101" className={inputCls} />
                 </div>
                 <div>
@@ -645,7 +656,7 @@ export default function RegisterPage() {
               {submitting ? <><Loader2 size={16} className="animate-spin" /> Đang gửi...</> : 'Gửi đăng ký'}
             </button>
             <p className="text-xs text-center text-muted-foreground">
-              Thông tin của bạn được bảo mật và chỉ dùng cho mục đích quản lý cư trú.
+              <span className="text-red-500">*</span> Trường bắt buộc · Thông tin của bạn được bảo mật và chỉ dùng cho mục đích quản lý cư trú.
             </p>
           </form>
         </div>

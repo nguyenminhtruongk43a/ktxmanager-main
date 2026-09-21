@@ -31,7 +31,7 @@ function parseFilterDate(dateStr: string, endOfDay = false): Date | null {
 }
 
 export default function AuditLogClient() {
-  const { logs } = useAudit();
+  const { logs, loading } = useAudit();
   const { isAdmin } = useAuth();
   const router = useRouter();
   const [filterAccount, setFilterAccount] = useState('');
@@ -100,12 +100,23 @@ export default function AuditLogClient() {
     setPage(1);
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="w-10 h-10 rounded-full border-2 border-primary border-t-transparent animate-spin mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">Đang tải nhật ký hệ thống...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="px-6 lg:px-8 xl:px-10 py-6 max-w-screen-2xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Nhật Ký Hệ Thống</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{filtered.length} bản ghi · Chỉ Admin xem</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{filtered.length} bản ghi · Tất cả tài khoản Admin</p>
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200">
           <span className="w-2 h-2 rounded-full bg-red-500" />

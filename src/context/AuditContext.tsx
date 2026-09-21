@@ -1,5 +1,6 @@
 'use client';
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createClient } from '@/lib/supabase/client';
 
 export type AuditAction = 'Thêm' | 'Sửa' | 'Xóa' | 'Chuyển phòng' | 'Đổi trạng thái tạm trú' | 'Import';
 
@@ -11,68 +12,68 @@ export interface AuditEntry {
   detail: string;
 }
 
-const LS_AUDIT_KEY = 'ktx_audit_logs';
-
-/** Get current time as ISO string in UTC+7 */
-function nowVN(): string {
-  const now = new Date();
-  // Offset to UTC+7
-  const vnOffset = 7 * 60; // minutes
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const vnTime = new Date(utc + vnOffset * 60000);
-  return vnTime.toISOString();
-}
-
-const INITIAL_LOG: AuditEntry = {
-  id: 'log-init-1',
-  timestamp: nowVN(),
-  account: 'admin@ktx.com',
-  action: 'Thêm',
-  detail: 'Khởi tạo hệ thống với 221 công nhân từ dữ liệu thực tế',
-};
-
-function loadLogs(): AuditEntry[] {
-  if (typeof window === 'undefined') return [INITIAL_LOG];
-  try {
-    const raw = localStorage.getItem(LS_AUDIT_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as AuditEntry[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {}
-  return [INITIAL_LOG];
-}
-
 interface AuditContextValue {
   logs: AuditEntry[];
   addLog: (account: string, action: AuditAction, detail: string) => void;
+  loading: boolean;
 }
 
 const AuditContext = createContext<AuditContextValue | null>(null);
 
 export function AuditProvider({ children }: { children: React.ReactNode }) {
-  const [logs, setLogs] = useState<AuditEntry[]>(() => loadLogs());
+  const [logs, setLogs] = useState<AuditEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const supabase = createClient();
 
-  // Persist logs to localStorage whenever they change
+  // Load all logs from Supabase on mount
   useEffect(() => {
-    try {
-      localStorage.setItem(LS_AUDIT_KEY, JSON.stringify(logs));
-    } catch {}
-  }, [logs]);
+    let mounted = true;
+    async function fetchLogs() {
+      try {
+        const { data, error } = await supabase
+          .from('audit_logs')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .limit(500);
+        if (!mounted) return;
+        if (!error && data) {
+          setLogs(data.map(row => ({
+            id: row.id,
+            timestamp: row.timestamp,
+            account: row.account,
+            action: row.action as AuditAction,
+            detail: row.detail,
+          })));
+        }
+      } catch {}
+      if (mounted) setLoading(false);
+    }
+    fetchLogs();
+    return () => { mounted = false; };
+  }, []);
 
-  const addLog = useCallback((account: string, action: AuditAction, detail: string) => {
+  const addLog = useCallback(async (account: string, action: AuditAction, detail: string) => {
     const entry: AuditEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: nowVN(),
+      timestamp: new Date().toISOString(),
       account,
       action,
       detail,
     };
+    // Optimistic update
     setLogs(prev => [entry, ...prev]);
-  }, []);
+    // Persist to Supabase
+    try {
+      await supabase.from('audit_logs').insert({
+        account,
+        action,
+        detail,
+      });
+    } catch {}
+  }, [supabase]);
 
   return (
-    <AuditContext.Provider value={{ logs, addLog }}>
+    <AuditContext.Provider value={{ logs, addLog, loading }}>
       {children}
     </AuditContext.Provider>
   );
