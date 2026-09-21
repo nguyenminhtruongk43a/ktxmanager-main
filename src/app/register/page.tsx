@@ -61,9 +61,7 @@ function parseCCCDQR(raw: string): CCCDData | null {
   }
   const genderRaw = parts[4].trim().toLowerCase();
   const gioiTinh = genderRaw === 'nam' || genderRaw === '0' || genderRaw === 'male' ? 'Nam' : 'Nữ';
-  const address = parts[5].trim();
-  const addrParts = address.split(',');
-  const hoKhauTinh = addrParts[addrParts.length - 1].trim();
+  const hoKhauTinh = parts[5].trim();
   return { cccd, hoVaTen, ngaySinh, gioiTinh, hoKhauTinh };
 }
 
@@ -223,9 +221,8 @@ function CCCDOCRScanner({ onConfirm, onClose }: {
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 mb-1 block">Hộ khẩu Tỉnh/TP</label>
-                  <input type="text" value={editData.hoKhauTinh || ''} onChange={e => setEditData(d => ({ ...d, hoKhauTinh: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="VD: An Giang" list="ocr-prov-reg" />
-                  <datalist id="ocr-prov-reg">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                  <label className="text-xs text-gray-500 mb-1 block">Địa chỉ thường trú / Hộ khẩu</label>
+                  <input type="text" value={editData.hoKhauTinh || ''} onChange={e => setEditData(d => ({ ...d, hoKhauTinh: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" />
                 </div>
               </div>
               <div className="flex gap-2 pt-1">
@@ -561,9 +558,8 @@ export default function RegisterPage() {
               </div>
 
               <div>
-                <label className={labelCls}>Hộ khẩu Tỉnh/TP</label>
-                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')} placeholder="VD: An Giang" list="province-list" className={inputCls} />
-                <datalist id="province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                <label className={labelCls}>Địa chỉ thường trú / Hộ khẩu</label>
+                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')} placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" className={inputCls} />
               </div>
             </div>
 
