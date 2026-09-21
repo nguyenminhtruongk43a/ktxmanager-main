@@ -47,9 +47,7 @@ function parseCCCDQR(raw: string): CCCDData | null {
   }
   const genderRaw = parts[4].trim().toLowerCase();
   const gioiTinh = genderRaw === 'nam' || genderRaw === '0' || genderRaw === 'male' ? 'Nam' : 'Nữ';
-  const address = parts[5].trim();
-  const addrParts = address.split(',');
-  const hoKhauTinh = addrParts[addrParts.length - 1].trim();
+  const hoKhauTinh = parts[5].trim();
   return { cccd, hoVaTen, ngaySinh, gioiTinh, hoKhauTinh };
 }
 
@@ -295,16 +293,14 @@ function CCCDOCRScanner({
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Hộ khẩu Tỉnh/TP</label>
+                  <label className="text-xs text-muted-foreground mb-1 block">Địa chỉ thường trú / Hộ khẩu</label>
                   <input
                     type="text"
                     value={editData.hoKhauTinh || ''}
                     onChange={e => setEditData(d => ({ ...d, hoKhauTinh: e.target.value }))}
                     className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    placeholder="VD: An Giang"
-                    list="ocr-province-list"
+                    placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh"
                   />
-                  <datalist id="ocr-province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
                 </div>
               </div>
               <div className="flex gap-2 pt-1">
@@ -604,9 +600,8 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                     <input {...register('cccd')} className="input-field font-tabular" placeholder="12 chữ số" maxLength={12} />
                   </div>
                   <div className="sm:col-span-2 form-group">
-                    <label className="label-field">Hộ khẩu Tỉnh/TP</label>
-                    <input {...register('hoKhauTinh')} className="input-field" placeholder="VD: An Giang" list="province-list" />
-                    <datalist id="province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                    <label className="label-field">Địa chỉ thường trú / Hộ khẩu</label>
+                    <input {...register('hoKhauTinh')} className="input-field" placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" />
                   </div>
                 </div>
               </div>
