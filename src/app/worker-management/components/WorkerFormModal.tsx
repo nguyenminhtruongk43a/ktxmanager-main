@@ -572,27 +572,24 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="sm:col-span-2 form-group">
-                    <label className="label-field">Họ và Tên <span className="text-red-500">*</span></label>
-                    <input {...register('hoVaTen', { required: 'Vui lòng nhập họ và tên' })} className="input-field" placeholder="VD: Nguyễn Văn An" />
-                    {errors.hoVaTen && <p className="text-xs text-red-500 mt-1">{errors.hoVaTen.message}</p>}
+                    <label className="label-field">Họ và Tên</label>
+                    <input {...register('hoVaTen')} className="input-field" placeholder="VD: Nguyễn Văn An" />
                   </div>
                   <div className="form-group">
                     <label className="label-field">Mã nhân viên</label>
                     <input {...register('maNV')} className="input-field font-tabular" placeholder="VD: 4218645 hoặc Chờ mã" />
                   </div>
                   <div className="form-group">
-                    <label className="label-field">Giới tính <span className="text-red-500">*</span></label>
-                    <select {...register('gioiTinh', { required: 'Vui lòng chọn giới tính' })} className="input-field">
+                    <label className="label-field">Giới tính</label>
+                    <select {...register('gioiTinh')} className="input-field">
                       <option value="">-- Chọn giới tính --</option>
                       <option value="Nam">Nam</option>
                       <option value="Nữ">Nữ</option>
                     </select>
-                    {errors.gioiTinh && <p className="text-xs text-red-500 mt-1">{errors.gioiTinh.message}</p>}
                   </div>
                   <div className="form-group">
-                    <label className="label-field">Ngày sinh <span className="text-red-500">*</span></label>
-                    <input {...register('ngaySinh', { required: 'Vui lòng nhập ngày sinh' })} className="input-field font-tabular" placeholder="VD: 15/06/1990" />
-                    {errors.ngaySinh && <p className="text-xs text-red-500 mt-1">{errors.ngaySinh.message}</p>}
+                    <label className="label-field">Ngày sinh</label>
+                    <input {...register('ngaySinh')} className="input-field font-tabular" placeholder="VD: 15/06/1990" />
                   </div>
                   <div className="form-group">
                     <label className="label-field">Số điện thoại</label>
@@ -603,9 +600,8 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                     <input {...register('cccd')} className="input-field font-tabular" placeholder="12 chữ số" maxLength={12} />
                   </div>
                   <div className="sm:col-span-2 form-group">
-                    <label className="label-field">Địa chỉ thường trú / Hộ khẩu <span className="text-red-500">*</span></label>
-                    <input {...register('hoKhauTinh', { required: 'Vui lòng nhập địa chỉ thường trú' })} className="input-field" placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" />
-                    {errors.hoKhauTinh && <p className="text-xs text-red-500 mt-1">{errors.hoKhauTinh.message}</p>}
+                    <label className="label-field">Địa chỉ thường trú / Hộ khẩu</label>
+                    <input {...register('hoKhauTinh')} className="input-field" placeholder="VD: 123 Đường ABC, Phường XYZ, Quận 1, TP Hồ Chí Minh" />
                   </div>
                 </div>
               </div>
@@ -615,10 +611,9 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 pb-1 border-b border-border">Thông tin KTX</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   <div className="form-group">
-                    <label className="label-field">KTX <span className="text-red-500">*</span></label>
-                    <input {...register('ktx', { required: 'Vui lòng nhập khu KTX' })} className="input-field" list="ktx-list" placeholder="VD: KTX 2" />
+                    <label className="label-field">KTX</label>
+                    <input {...register('ktx')} className="input-field" list="ktx-list" placeholder="VD: KTX 2" />
                     <datalist id="ktx-list">{ktxList.map(k => <option key={k} value={k} />)}</datalist>
-                    {errors.ktx && <p className="text-xs text-red-500 mt-1">{errors.ktx.message}</p>}
                   </div>
                   <div className="form-group">
                     <label className="label-field">Tiểu đoàn / Trung đoàn</label>
@@ -629,15 +624,13 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
                     </datalist>
                   </div>
                   <div className="form-group">
-                    <label className="label-field">Dãy nhà <span className="text-red-500">*</span></label>
-                    <input {...register('day', { required: 'Vui lòng nhập dãy nhà' })} className="input-field" list="day-list" placeholder="VD: Dãy 3" />
+                    <label className="label-field">Dãy nhà</label>
+                    <input {...register('day')} className="input-field" list="day-list" placeholder="VD: Dãy 3" />
                     <datalist id="day-list">{dayList.map(d => <option key={d} value={d} />)}</datalist>
-                    {errors.day && <p className="text-xs text-red-500 mt-1">{errors.day.message}</p>}
                   </div>
                   <div className="form-group">
-                    <label className="label-field">Phòng số <span className="text-red-500">*</span></label>
-                    <input {...register('phongSo', { required: 'Vui lòng nhập phòng số' })} className="input-field font-tabular" placeholder="VD: 1, 2, 3..." />
-                    {errors.phongSo && <p className="text-xs text-red-500 mt-1">{errors.phongSo.message}</p>}
+                    <label className="label-field">Phòng số</label>
+                    <input {...register('phongSo')} className="input-field font-tabular" placeholder="VD: 1, 2, 3..." />
                   </div>
                   <div className="form-group">
                     <label className="label-field">Số giường</label>
@@ -689,7 +682,6 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
             </div>
 
             <div className="sticky bottom-0 bg-card border-t border-border px-5 py-3 flex items-center justify-between gap-3">
-              <p className="text-xs text-muted-foreground"><span className="text-red-500">*</span> Trường bắt buộc</p>
               <div className="flex gap-2">
                 <button type="button" onClick={onClose} className="btn-secondary text-xs">Hủy bỏ</button>
                 <button type="submit" disabled={saving} className="btn-primary text-xs min-w-[110px] justify-center">
