@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
-export type AuditAction = 'Thêm' | 'Sửa' | 'Xóa' | 'Chuyển phòng' | 'Đổi trạng thái tạm trú' | 'Import';
+export type AuditAction = 'Thêm' | 'Sửa' | 'Xóa' | 'Chuyển phòng' | 'Đổi trạng thái tạm trú' | 'Import' | 'CREATE' | 'UPDATE' | 'DELETE' | 'IMPORT';
 
 export interface AuditEntry {
   id: string;

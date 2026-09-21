@@ -200,9 +200,10 @@ export default function ReportDashboard() {
     logs.forEach(log => {
       const action = log.action as string;
       let type: MovementType | null = null;
-      if (action === 'Thêm') type = 'tang';
-      else if (action === 'Xóa') type = 'giam';
-      else if (action === 'Import') type = 'import';
+      // Match both Vietnamese labels and English action codes stored in DB
+      if (action === 'Thêm' || action === 'CREATE') type = 'tang';
+      else if (action === 'Xóa' || action === 'DELETE') type = 'giam';
+      else if (action === 'Import' || action === 'IMPORT') type = 'import';
       if (!type) return;
 
       // Extract worker info from detail string
