@@ -1123,7 +1123,7 @@ export default function WorkerManagementClient() {
       if (isNew) {
         await addWorker(data);
         // Instant movement log: +Vào
-        writeAuditLog('CREATE', `Thêm công nhân ${data.hoVaTen}`);
+        writeAuditLog('CREATE', `Thêm công nhân: ${data.hoVaTen} (Mã NV: ${data.maNV || data.cccd || 'N/A'})`);
         toast.success('Đã thêm công nhân mới');
       } else {
         const old = workers.find(w => w.id === data.id);
@@ -1131,9 +1131,9 @@ export default function WorkerManagementClient() {
         await updateWorker(data);
         if (isRoomChange) {
           // Instant movement log: Chuyển phòng
-          writeAuditLog('UPDATE', `Cập nhật công nhân ${data.hoVaTen}: chuyển phòng`);
+          writeAuditLog('UPDATE', `Cập nhật công nhân: ${data.hoVaTen} (Mã NV: ${data.maNV || data.cccd || 'N/A'}) — chuyển phòng`);
         } else {
-          writeAuditLog('UPDATE', `Cập nhật công nhân ${data.hoVaTen}`);
+          writeAuditLog('UPDATE', `Cập nhật công nhân: ${data.hoVaTen} (Mã NV: ${data.maNV || data.cccd || 'N/A'})`);
         }
         toast.success('Đã cập nhật thông tin công nhân');
       }
@@ -1156,9 +1156,9 @@ export default function WorkerManagementClient() {
       await deleteWorkers(ids);
       setSelectedIds(new Set());
       setDeleteTarget(null);
-      // Instant movement log: -Ra for each deleted worker
+      // Log each deleted worker with name + maNV/CCCD
       arr.forEach(w => {
-        writeAuditLog('DELETE', `Xóa công nhân ${w.id}`);
+        writeAuditLog('DELETE', `Xóa công nhân: ${w.hoVaTen} (Mã NV: ${w.maNV || w.cccd || 'N/A'})`);
       });
       toast.success(`Đã xóa ${ids.length} công nhân`);
     } catch (err) {
@@ -1175,7 +1175,7 @@ export default function WorkerManagementClient() {
     setSelectedIds(new Set());
     writeAuditLog('DELETE', `Xóa hàng loạt ${ids.length} công nhân theo bộ lọc`);
     targets.forEach(w => {
-      writeAuditLog('DELETE', `Xóa công nhân ${w.id}`);
+      writeAuditLog('DELETE', `Xóa công nhân: ${w.hoVaTen} (Mã NV: ${w.maNV || w.cccd || 'N/A'})`);
     });
   }, [currentUser, writeAuditLog, deleteWorkers, workers]);
 
