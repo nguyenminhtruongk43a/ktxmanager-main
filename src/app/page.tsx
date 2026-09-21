@@ -8,6 +8,7 @@ import { Users, LayoutGrid, Percent, AlertCircle, FileSpreadsheet, Wifi, Chevron
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import Icon from '@/components/ui/AppIcon';
+import WorkerFormModal from '@/app/worker-management/components/WorkerFormModal';
 
 
 
@@ -257,7 +258,7 @@ function BlockTitle({
 
 // ─── Main Page ─────────────────────────────────────────────────────────────
 export default function OccupancyDashboardPage() {
-  const { workers, loading } = useWorkers();
+  const { workers, loading, addWorker } = useWorkers();
   const router = useRouter();
   const [selectedKTX, setSelectedKTX] = useState<string>('all');
   const [drawerRoom, setDrawerRoom] = useState<{ ktx: string; building: string; room: string } | null>(null);
@@ -272,6 +273,8 @@ export default function OccupancyDashboardPage() {
   const [contractorByKtx, setContractorByKtx] = useState<Record<string, [string, number][]>>({});
   // Block assignments: map of "KTX X - Dãy Y" -> staffName
   const [blockAssignments, setBlockAssignments] = useState<BlockAssignment[]>([]);
+  // Quick-add modal state
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
 
   const isEmpty = !loading && workers.length === 0;
 
@@ -595,7 +598,7 @@ export default function OccupancyDashboardPage() {
         {/* ── Quick Action Buttons ── */}
         <div className="flex flex-wrap gap-2 mb-5">
           <button
-            onClick={handleMissingDataClick}
+            onClick={() => setShowQuickAdd(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm"
           >
             <UserPlus size={15} />
@@ -949,10 +952,26 @@ export default function OccupancyDashboardPage() {
       {/* Room Drawer */}
       {drawerRoom && (
         <RoomDrawer
-          building={`${drawerRoom.ktx ? drawerRoom.ktx + ' · ' : ''}${drawerRoom.building}`}
+          ktx={drawerRoom.ktx}
+          building={drawerRoom.building}
           room={drawerRoom.room}
           workers={drawerWorkers}
           onClose={() => setDrawerRoom(null)}
+        />
+      )}
+      {showQuickAdd && (
+        <WorkerFormModal
+          worker={null}
+          allWorkers={workers}
+          onSave={async (w) => {
+            try {
+              await addWorker(w);
+            } catch (err) {
+              console.error('Quick-add worker error:', err);
+            }
+            setShowQuickAdd(false);
+          }}
+          onClose={() => setShowQuickAdd(false)}
         />
       )}
     </AppLayout>

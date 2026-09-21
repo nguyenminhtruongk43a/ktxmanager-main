@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { CheckCircle2, AlertCircle, Loader2, User, X, QrCode, Home, ScanLine, CheckCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, User, X, QrCode, Home, ScanLine, CheckCircle, Camera, AlertTriangle, Check, RefreshCw } from 'lucide-react';
 
 interface RegistrationForm {
   ma_nv: string;
@@ -11,7 +11,6 @@ interface RegistrationForm {
   so_dien_thoai: string;
   so_cccd: string;
   ho_khau_tinh: string;
-  // KTX info
   ktx: string;
   tieu_doan: string;
   day: string;
@@ -19,10 +18,8 @@ interface RegistrationForm {
   giuong: string;
   don_vi: string;
   ngay_vao_ktx: string;
-  // Team leader
   to_truong: string;
   sdt_to_truong: string;
-  // Extra
   ghi_chu: string;
 }
 
@@ -43,10 +40,15 @@ const PROVINCES = [
   'Vĩnh Long','Thanh Hóa','Thừa Thiên Huế','Bình Định','Ninh Bình',
 ];
 
-/** Parse Vietnamese CCCD chip QR code.
- * Format: CCCD|OldID|FullName|DOB(DDMMYYYY)|Gender|Address|Expiry
- */
-function parseCCCDQR(raw: string): { cccd: string; hoVaTen: string; ngaySinh: string; gioiTinh: string; hoKhauTinh: string } | null {
+interface CCCDData {
+  cccd: string;
+  hoVaTen: string;
+  ngaySinh: string;
+  gioiTinh: string;
+  hoKhauTinh: string;
+}
+
+function parseCCCDQR(raw: string): CCCDData | null {
   const parts = raw.split('|');
   if (parts.length < 7) return null;
   const cccd = parts[0].trim();
@@ -65,10 +67,188 @@ function parseCCCDQR(raw: string): { cccd: string; hoVaTen: string; ngaySinh: st
   return { cccd, hoVaTen, ngaySinh, gioiTinh, hoKhauTinh };
 }
 
-/** CCCDScanner component */
-function CCCDScanner({ onScanned, onClose }: {
-  onScanned: (data: ReturnType<typeof parseCCCDQR>) => void;
+function extractOCRFromText(text: string): Partial<CCCDData> {
+  const result: Partial<CCCDData> = {};
+  const cccdMatch = text.match(/\b(\d{12})\b/);
+  if (cccdMatch) result.cccd = cccdMatch[1];
+  const dobMatch = text.match(/\b(\d{2})[\/\-](\d{2})[\/\-](\d{4})\b/);
+  if (dobMatch) result.ngaySinh = `${dobMatch[1]}/${dobMatch[2]}/${dobMatch[3]}`;
+  if (/\bNam\b/i.test(text)) result.gioiTinh = 'Nam';
+  else if (/\bN[uư][̃]?\b/i.test(text) || /\bFemale\b/i.test(text)) result.gioiTinh = 'Nữ';
+  const nameMatch = text.match(/([A-ZÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ]{2,}\s+){1,3}[A-ZÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ]{2,}/);
+  if (nameMatch) result.hoVaTen = nameMatch[0].trim();
+  for (const p of PROVINCES) {
+    if (text.includes(p)) { result.hoKhauTinh = p; break; }
+  }
+  return result;
+}
+
+/** OCR Scanner for register page */
+function CCCDOCRScanner({ onConfirm, onClose }: {
+  onConfirm: (data: Partial<CCCDData>) => void;
   onClose: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [status, setStatus] = useState<'starting' | 'ready' | 'capturing' | 'confirming' | 'error'>('starting');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [editData, setEditData] = useState<Partial<CCCDData>>({});
+
+  useEffect(() => {
+    let active = true;
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          setStatus('ready');
+        }
+      } catch (e: any) {
+        setStatus('error');
+        setErrorMsg(e?.message || 'Không thể truy cập camera');
+      }
+    }
+    start();
+    return () => { active = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
+  }, []);
+
+  const handleCapture = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    setStatus('capturing');
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    let extracted: Partial<CCCDData> = {};
+    try {
+      // @ts-ignore
+      if (window.Tesseract) {
+        // @ts-ignore
+        const result = await window.Tesseract.recognize(canvas, 'vie');
+        extracted = extractOCRFromText(result.data.text);
+      }
+    } catch {}
+    setEditData(extracted);
+    setStatus('confirming');
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  };
+
+  const handleRetake = () => {
+    setEditData({});
+    setStatus('starting');
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    }).then(stream => {
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); setStatus('ready'); }
+    }).catch(e => { setStatus('error'); setErrorMsg(e?.message || 'Lỗi camera'); });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Camera size={16} className="text-amber-500" />
+            <span className="text-sm font-semibold text-gray-900">Chụp mặt trước CCCD (OCR)</span>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"><X size={16} /></button>
+        </div>
+        {status !== 'confirming' && (
+          <div className="relative bg-black aspect-video flex-shrink-0">
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <canvas ref={canvasRef} className="hidden" />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-[85%] h-[55%] border-2 border-amber-400/80 rounded-xl relative">
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-amber-400 rounded-tl-lg" />
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-amber-400 rounded-tr-lg" />
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-amber-400 rounded-bl-lg" />
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-amber-400 rounded-br-lg" />
+              </div>
+            </div>
+          </div>
+        )}
+        <div className="px-4 py-3 flex-1 overflow-y-auto">
+          {status === 'starting' && <p className="text-xs text-gray-500 flex items-center justify-center gap-1.5 py-2"><Loader2 size={12} className="animate-spin" />Đang khởi động camera...</p>}
+          {status === 'ready' && (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 text-center">Đặt mặt trước CCCD vào khung, giữ thẳng và rõ nét</p>
+              <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle size={13} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-700">Dữ liệu bóc tách cần xác nhận trước khi lưu.</p>
+              </div>
+              <button onClick={handleCapture} className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2">
+                <Camera size={15} />Chụp ảnh CCCD
+              </button>
+            </div>
+          )}
+          {status === 'capturing' && <p className="text-xs text-gray-500 flex items-center justify-center gap-1.5 py-2"><Loader2 size={12} className="animate-spin" />Đang bóc tách dữ liệu...</p>}
+          {status === 'error' && <p className="text-xs text-red-500 text-center py-2">{errorMsg}</p>}
+          {status === 'confirming' && (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
+                <AlertTriangle size={13} className="text-blue-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-blue-700 font-medium">Kiểm tra và chỉnh sửa dữ liệu. Bắt buộc nhấn "Xác nhận đúng" để áp dụng.</p>
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Họ và tên</label>
+                  <input type="text" value={editData.hoVaTen || ''} onChange={e => setEditData(d => ({ ...d, hoVaTen: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="Nhập họ tên" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Số CCCD</label>
+                  <input type="text" value={editData.cccd || ''} onChange={e => setEditData(d => ({ ...d, cccd: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono" placeholder="12 chữ số" maxLength={12} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">Ngày sinh</label>
+                    <input type="text" value={editData.ngaySinh || ''} onChange={e => setEditData(d => ({ ...d, ngaySinh: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="DD/MM/YYYY" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">Giới tính</label>
+                    <select value={editData.gioiTinh || ''} onChange={e => setEditData(d => ({ ...d, gioiTinh: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300">
+                      <option value="">Chọn</option>
+                      <option value="Nam">Nam</option>
+                      <option value="Nữ">Nữ</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Hộ khẩu Tỉnh/TP</label>
+                  <input type="text" value={editData.hoKhauTinh || ''} onChange={e => setEditData(d => ({ ...d, hoKhauTinh: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="VD: An Giang" list="ocr-prov-reg" />
+                  <datalist id="ocr-prov-reg">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={handleRetake} className="flex-1 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-1.5">
+                  <RefreshCw size={13} />Chụp lại
+                </button>
+                <button onClick={() => onConfirm(editData)} className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-1.5">
+                  <Check size={13} />Xác nhận đúng
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** QR Scanner for register page */
+function CCCDQRScanner({ onScanned, onClose, onSwitchOCR }: {
+  onScanned: (data: CCCDData | null) => void;
+  onClose: () => void;
+  onSwitchOCR: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -127,11 +307,7 @@ function CCCDScanner({ onScanned, onClose }: {
               if (window.__jsQR) {
                 // @ts-ignore
                 const code = window.__jsQR(imageData.data, canvas.width, canvas.height);
-                if (code) {
-                  const parsed = parseCCCDQR(code.data);
-                  onScanned(parsed);
-                  return;
-                }
+                if (code) { onScanned(parseCCCDQR(code.data)); return; }
               }
             } catch {}
           }
@@ -154,7 +330,7 @@ function CCCDScanner({ onScanned, onClose }: {
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <div className="flex items-center gap-2">
             <ScanLine size={16} className="text-blue-600" />
-            <span className="text-sm font-semibold text-gray-900">Quét CCCD gắn chip</span>
+            <span className="text-sm font-semibold text-gray-900">Quét QR mặt sau CCCD</span>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"><X size={16} /></button>
         </div>
@@ -170,14 +346,45 @@ function CCCDScanner({ onScanned, onClose }: {
             </div>
           </div>
         </div>
-        <div className="px-4 py-3 text-center">
+        <div className="px-4 py-3 space-y-2">
           {status === 'starting' && <p className="text-xs text-gray-500 flex items-center justify-center gap-1.5"><Loader2 size={12} className="animate-spin" />Đang khởi động camera...</p>}
-          {status === 'scanning' && <p className="text-xs text-gray-500">Hướng camera vào mã QR trên mặt sau CCCD gắn chip</p>}
-          {status === 'error' && <p className="text-xs text-red-500">{errorMsg || 'Không thể truy cập camera. Vui lòng nhập tay.'}</p>}
+          {status === 'scanning' && <p className="text-xs text-gray-500 text-center">Hướng camera vào mã QR trên mặt sau CCCD gắn chip</p>}
+          {status === 'error' && <p className="text-xs text-red-500 text-center">{errorMsg || 'Không thể truy cập camera. Vui lòng nhập tay.'}</p>}
+          <button
+            onClick={onSwitchOCR}
+            className="w-full py-2 border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Camera size={12} />
+            Mã QR bị hỏng? Chuyển sang chụp mặt trước (OCR)
+          </button>
         </div>
       </div>
     </div>
   );
+}
+
+/** Unified CCCD Scanner for register page */
+function CCCDScanner({ onScanned, onClose }: {
+  onScanned: (data: CCCDData | null) => void;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<'qr' | 'ocr'>('qr');
+
+  const handleOCRConfirm = (data: Partial<CCCDData>) => {
+    onScanned({
+      cccd: data.cccd || '',
+      hoVaTen: data.hoVaTen || '',
+      ngaySinh: data.ngaySinh || '',
+      gioiTinh: data.gioiTinh || 'Nam',
+      hoKhauTinh: data.hoKhauTinh || '',
+    });
+  };
+
+  if (mode === 'ocr') {
+    return <CCCDOCRScanner onConfirm={handleOCRConfirm} onClose={onClose} />;
+  }
+
+  return <CCCDQRScanner onScanned={onScanned} onClose={onClose} onSwitchOCR={() => setMode('ocr')} />;
 }
 
 const inputCls = 'w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-primary/30';
@@ -197,16 +404,16 @@ export default function RegisterPage() {
     setForm(f => ({ ...f, [k]: e.target.value }));
   };
 
-  const handleScanned = useCallback((parsed: ReturnType<typeof parseCCCDQR>) => {
+  const handleScanned = useCallback((parsed: CCCDData | null) => {
     setShowScanner(false);
     if (parsed) {
       setForm(f => ({
         ...f,
-        so_cccd: parsed.cccd,
-        ho_va_ten: parsed.hoVaTen,
-        ngay_sinh: parsed.ngaySinh,
-        gioi_tinh: parsed.gioiTinh,
-        ho_khau_tinh: parsed.hoKhauTinh,
+        so_cccd: parsed.cccd || f.so_cccd,
+        ho_va_ten: parsed.hoVaTen || f.ho_va_ten,
+        ngay_sinh: parsed.ngaySinh || f.ngay_sinh,
+        gioi_tinh: parsed.gioiTinh || f.gioi_tinh,
+        ho_khau_tinh: parsed.hoKhauTinh || f.ho_khau_tinh,
       }));
       setScanSuccess(true);
       setTimeout(() => setScanSuccess(false), 3000);
@@ -243,7 +450,6 @@ export default function RegisterPage() {
         ghi_chu: form.ghi_chu.trim(),
         status: 'pending',
       });
-
       if (insertErr) throw new Error(insertErr.message);
       setSubmitted(true);
     } catch (err: any) {
@@ -318,13 +524,10 @@ export default function RegisterPage() {
                 </div>
               )}
 
-              {/* Row: Mã NV + Giới tính */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Mã nhân viên</label>
-                  <input type="text" value={form.ma_nv} onChange={handleField('ma_nv')}
-                    placeholder="NV001 hoặc để trống"
-                    className={inputCls} />
+                  <input type="text" value={form.ma_nv} onChange={handleField('ma_nv')} placeholder="NV001 hoặc để trống" className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Giới tính</label>
@@ -336,48 +539,31 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Họ và tên */}
               <div>
                 <label className={labelCls}>Họ và tên <span className="text-red-500">*</span></label>
-                <input type="text" value={form.ho_va_ten} onChange={handleField('ho_va_ten')} required
-                  placeholder="Nguyễn Văn A"
-                  className={inputCls} />
+                <input type="text" value={form.ho_va_ten} onChange={handleField('ho_va_ten')} required placeholder="Nguyễn Văn A" className={inputCls} />
               </div>
 
-              {/* Row: Ngày sinh + Số điện thoại */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Ngày sinh</label>
-                  <input type="text" value={form.ngay_sinh} onChange={handleField('ngay_sinh')}
-                    placeholder="VD: 15/06/1990"
-                    className={inputCls} />
+                  <input type="text" value={form.ngay_sinh} onChange={handleField('ngay_sinh')} placeholder="VD: 15/06/1990" className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Số điện thoại <span className="text-red-500">*</span></label>
-                  <input type="tel" value={form.so_dien_thoai} onChange={handleField('so_dien_thoai')} required
-                    placeholder="0901234567"
-                    className={inputCls} />
+                  <input type="tel" value={form.so_dien_thoai} onChange={handleField('so_dien_thoai')} required placeholder="0901234567" className={inputCls} />
                 </div>
               </div>
 
-              {/* Số CCCD */}
               <div>
                 <label className={labelCls}>Số CCCD <span className="text-red-500">*</span></label>
-                <input type="text" value={form.so_cccd} onChange={handleField('so_cccd')} required
-                  placeholder="012345678901"
-                  className={inputCls} />
+                <input type="text" value={form.so_cccd} onChange={handleField('so_cccd')} required placeholder="012345678901" className={inputCls} />
               </div>
 
-              {/* Hộ khẩu Tỉnh/TP */}
               <div>
                 <label className={labelCls}>Hộ khẩu Tỉnh/TP</label>
-                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')}
-                  placeholder="VD: An Giang"
-                  list="province-list"
-                  className={inputCls} />
-                <datalist id="province-list">
-                  {PROVINCES.map(p => <option key={p} value={p} />)}
-                </datalist>
+                <input type="text" value={form.ho_khau_tinh} onChange={handleField('ho_khau_tinh')} placeholder="VD: An Giang" list="province-list" className={inputCls} />
+                <datalist id="province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
               </div>
             </div>
 
@@ -387,65 +573,43 @@ export default function RegisterPage() {
                 <Home size={15} className="text-primary" /> Thông tin KTX
               </h3>
 
-              {/* Row: Khu KTX + Tiểu đoàn / Trung đoàn */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Khu KTX</label>
-                  <input type="text" value={form.ktx} onChange={handleField('ktx')}
-                    placeholder="VD: KTX 1, KTX 2..."
-                    list="ktx-list"
-                    className={inputCls} />
+                  <input type="text" value={form.ktx} onChange={handleField('ktx')} placeholder="VD: KTX 1, KTX 2..." list="ktx-list" className={inputCls} />
                   <datalist id="ktx-list">
-                    <option value="KTX 1" />
-                    <option value="KTX 2" />
-                    <option value="KTX 3" />
-                    <option value="KTX 4" />
-                    <option value="KTX 5" />
+                    <option value="KTX 1" /><option value="KTX 2" /><option value="KTX 3" /><option value="KTX 4" /><option value="KTX 5" />
                   </datalist>
                 </div>
                 <div>
                   <label className={labelCls}>Tiểu đoàn / Trung đoàn</label>
-                  <input type="text" value={form.tieu_doan} onChange={handleField('tieu_doan')}
-                    placeholder="VD: 8, 111, 113..."
-                    className={inputCls} />
+                  <input type="text" value={form.tieu_doan} onChange={handleField('tieu_doan')} placeholder="VD: 8, 111, 113..." className={inputCls} />
                 </div>
               </div>
 
-              {/* Row: Dãy nhà + Phòng số + Số giường */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className={labelCls}>Dãy nhà</label>
-                  <input type="text" value={form.day} onChange={handleField('day')}
-                    placeholder="Dãy 3"
-                    className={inputCls} />
+                  <input type="text" value={form.day} onChange={handleField('day')} placeholder="Dãy 3" className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Phòng số</label>
-                  <input type="text" value={form.phong_so} onChange={handleField('phong_so')}
-                    placeholder="101"
-                    className={inputCls} />
+                  <input type="text" value={form.phong_so} onChange={handleField('phong_so')} placeholder="101" className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Số giường</label>
-                  <input type="text" value={form.giuong} onChange={handleField('giuong')}
-                    placeholder="1–20"
-                    className={inputCls} />
+                  <input type="text" value={form.giuong} onChange={handleField('giuong')} placeholder="1–20" className={inputCls} />
                 </div>
               </div>
 
-              {/* Row: Đơn vị + Ngày vào KTX */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Đơn vị</label>
-                  <input type="text" value={form.don_vi} onChange={handleField('don_vi')}
-                    placeholder="VD: XD, ME..."
-                    className={inputCls} />
+                  <input type="text" value={form.don_vi} onChange={handleField('don_vi')} placeholder="VD: XD, ME..." className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Ngày vào KTX</label>
-                  <input type="text" value={form.ngay_vao_ktx} onChange={handleField('ngay_vao_ktx')}
-                    placeholder="VD: 01/09/2026"
-                    className={inputCls} />
+                  <input type="text" value={form.ngay_vao_ktx} onChange={handleField('ngay_vao_ktx')} placeholder="VD: 01/09/2026" className={inputCls} />
                 </div>
               </div>
             </div>
@@ -458,15 +622,11 @@ export default function RegisterPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Họ tên tổ trưởng</label>
-                  <input type="text" value={form.to_truong} onChange={handleField('to_truong')}
-                    placeholder="Nguyễn Văn B"
-                    className={inputCls} />
+                  <input type="text" value={form.to_truong} onChange={handleField('to_truong')} placeholder="Nguyễn Văn B" className={inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>SĐT tổ trưởng</label>
-                  <input type="tel" value={form.sdt_to_truong} onChange={handleField('sdt_to_truong')}
-                    placeholder="0901234567"
-                    className={inputCls} />
+                  <input type="tel" value={form.sdt_to_truong} onChange={handleField('sdt_to_truong')} placeholder="0901234567" className={inputCls} />
                 </div>
               </div>
             </div>
@@ -474,12 +634,9 @@ export default function RegisterPage() {
             {/* Ghi chú */}
             <div className="pt-1 border-t border-border">
               <label className={labelCls}>Ghi chú (nếu có)</label>
-              <textarea value={form.ghi_chu} onChange={handleField('ghi_chu')} rows={2}
-                placeholder="Thông tin thêm..."
-                className={`${inputCls} resize-none`} />
+              <textarea value={form.ghi_chu} onChange={handleField('ghi_chu')} rows={2} placeholder="Thông tin thêm..." className={`${inputCls} resize-none`} />
             </div>
 
-            {/* Error */}
             {error && (
               <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" />
@@ -487,7 +644,6 @@ export default function RegisterPage() {
               </div>
             )}
 
-            {/* Submit */}
             <button type="submit" disabled={submitting}
               className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-semibold text-sm hover:opacity-90 disabled:opacity-60 transition-opacity flex items-center justify-center gap-2">
               {submitting ? <><Loader2 size={16} className="animate-spin" /> Đang gửi...</> : 'Gửi đăng ký'}

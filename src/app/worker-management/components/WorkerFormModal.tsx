@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { Worker, calcSoNgay } from '@/data/workers';
-import { X, Loader2, Save, ScanLine, CheckCircle2 } from 'lucide-react';
+import { X, Loader2, Save, ScanLine, CheckCircle2, Camera, AlertTriangle, Check, RefreshCw } from 'lucide-react';
 
 interface Props {
   worker: Worker | null;
@@ -22,17 +22,25 @@ const PROVINCES = [
   'Vĩnh Long','Thanh Hóa','Thừa Thiên Huế','Bình Định','Ninh Bình',
 ];
 
+interface CCCDData {
+  cccd: string;
+  hoVaTen: string;
+  ngaySinh: string;
+  gioiTinh: string;
+  hoKhauTinh: string;
+}
+
 /** Parse Vietnamese CCCD chip QR code.
  * Format: CCCD|OldID|FullName|DOB(DDMMYYYY)|Gender|Address|Expiry
  * Returns null if not a valid CCCD QR.
  */
-function parseCCCDQR(raw: string): { cccd: string; hoVaTen: string; ngaySinh: string; gioiTinh: string; hoKhauTinh: string } | null {
+function parseCCCDQR(raw: string): CCCDData | null {
   const parts = raw.split('|');
   if (parts.length < 7) return null;
   const cccd = parts[0].trim();
   if (!/^\d{9,12}$/.test(cccd)) return null;
   const hoVaTen = parts[2].trim();
-  const dobRaw = parts[3].trim(); // DDMMYYYY
+  const dobRaw = parts[3].trim();
   let ngaySinh = dobRaw;
   if (/^\d{8}$/.test(dobRaw)) {
     ngaySinh = `${dobRaw.slice(0, 2)}/${dobRaw.slice(2, 4)}/${dobRaw.slice(4)}`;
@@ -40,14 +48,295 @@ function parseCCCDQR(raw: string): { cccd: string; hoVaTen: string; ngaySinh: st
   const genderRaw = parts[4].trim().toLowerCase();
   const gioiTinh = genderRaw === 'nam' || genderRaw === '0' || genderRaw === 'male' ? 'Nam' : 'Nữ';
   const address = parts[5].trim();
-  // Extract province from address (last segment after last comma)
   const addrParts = address.split(',');
   const hoKhauTinh = addrParts[addrParts.length - 1].trim();
   return { cccd, hoVaTen, ngaySinh, gioiTinh, hoKhauTinh };
 }
 
-/** CCCDScanner: opens camera, uses BarcodeDetector or jsQR fallback to scan QR */
-function CCCDScanner({ onScanned, onClose }: { onScanned: (data: ReturnType<typeof parseCCCDQR>) => void; onClose: () => void }) {
+/** Simple OCR extraction from CCCD front image using canvas text analysis.
+ * Attempts to extract key fields from a captured frame via pattern matching.
+ * Returns partial data — user must confirm before applying.
+ */
+function extractOCRFromText(text: string): Partial<CCCDData> {
+  const result: Partial<CCCDData> = {};
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // CCCD number: 12 digits
+  const cccdMatch = text.match(/\b(\d{12})\b/);
+  if (cccdMatch) result.cccd = cccdMatch[1];
+
+  // Date of birth: DD/MM/YYYY or DD-MM-YYYY
+  const dobMatch = text.match(/\b(\d{2})[\/\-](\d{2})[\/\-](\d{4})\b/);
+  if (dobMatch) result.ngaySinh = `${dobMatch[1]}/${dobMatch[2]}/${dobMatch[3]}`;
+
+  // Gender
+  if (/\bNam\b/i.test(text)) result.gioiTinh = 'Nam';
+  else if (/\bN[uư][̃]?\b/i.test(text) || /\bFemale\b/i.test(text)) result.gioiTinh = 'Nữ';
+
+  // Name: look for all-caps Vietnamese name pattern (typically 2-4 words)
+  const nameMatch = text.match(/([A-ZÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ]{2,}\s+){1,3}[A-ZÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ]{2,}/);
+  if (nameMatch) result.hoVaTen = nameMatch[0].trim();
+
+  // Province: check against known provinces
+  for (const p of PROVINCES) {
+    if (text.includes(p)) { result.hoKhauTinh = p; break; }
+  }
+
+  return result;
+}
+
+/** OCR Scanner: captures front of CCCD, extracts text via canvas, shows confirmation */
+function CCCDOCRScanner({
+  onConfirm,
+  onClose,
+}: {
+  onConfirm: (data: Partial<CCCDData>) => void;
+  onClose: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [status, setStatus] = useState<'starting' | 'ready' | 'capturing' | 'confirming' | 'error'>('starting');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [capturedData, setCapturedData] = useState<Partial<CCCDData>>({});
+  const [editData, setEditData] = useState<Partial<CCCDData>>({});
+
+  useEffect(() => {
+    let active = true;
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          setStatus('ready');
+        }
+      } catch (e: any) {
+        setStatus('error');
+        setErrorMsg(e?.message || 'Không thể truy cập camera');
+      }
+    }
+    start();
+    return () => {
+      active = false;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const handleCapture = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    setStatus('capturing');
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Try to use Tesseract.js if available, otherwise use basic pattern matching on image data
+    let extracted: Partial<CCCDData> = {};
+    try {
+      // @ts-ignore
+      if (window.Tesseract) {
+        // @ts-ignore
+        const result = await window.Tesseract.recognize(canvas, 'vie');
+        extracted = extractOCRFromText(result.data.text);
+      } else {
+        // Fallback: show empty form for manual entry with note
+        extracted = {};
+      }
+    } catch {
+      extracted = {};
+    }
+
+    setCapturedData(extracted);
+    setEditData(extracted);
+    setStatus('confirming');
+    // Stop camera after capture
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  };
+
+  const handleConfirm = () => {
+    onConfirm(editData);
+  };
+
+  const handleRetake = () => {
+    setCapturedData({});
+    setEditData({});
+    setStatus('starting');
+    // Restart camera
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    }).then(stream => {
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        setStatus('ready');
+      }
+    }).catch(e => {
+      setStatus('error');
+      setErrorMsg(e?.message || 'Không thể khởi động lại camera');
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+      <div className="bg-card rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Camera size={16} className="text-amber-500" />
+            <span className="text-sm font-semibold">Chụp mặt trước CCCD (OCR)</span>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors"><X size={16} /></button>
+        </div>
+
+        {status !== 'confirming' && (
+          <div className="relative bg-black aspect-video flex-shrink-0">
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <canvas ref={canvasRef} className="hidden" />
+            {/* Card outline guide */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-[85%] h-[55%] border-2 border-amber-400/80 rounded-xl relative">
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-amber-400 rounded-tl-lg" />
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-amber-400 rounded-tr-lg" />
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-amber-400 rounded-bl-lg" />
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-amber-400 rounded-br-lg" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="px-4 py-3 flex-1 overflow-y-auto">
+          {status === 'starting' && (
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5 py-2">
+              <Loader2 size={12} className="animate-spin" />Đang khởi động camera...
+            </p>
+          )}
+          {status === 'ready' && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground text-center">Đặt mặt trước CCCD vào khung, giữ thẳng và rõ nét</p>
+              <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle size={13} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-700">Chế độ OCR dùng khi mã QR mặt sau bị hỏng. Dữ liệu bóc tách cần xác nhận trước khi lưu.</p>
+              </div>
+              <button
+                onClick={handleCapture}
+                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <Camera size={15} />
+                Chụp ảnh CCCD
+              </button>
+            </div>
+          )}
+          {status === 'capturing' && (
+            <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5 py-2">
+              <Loader2 size={12} className="animate-spin" />Đang bóc tách dữ liệu...
+            </p>
+          )}
+          {status === 'error' && (
+            <p className="text-xs text-red-500 text-center py-2">{errorMsg || 'Không thể truy cập camera.'}</p>
+          )}
+          {status === 'confirming' && (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
+                <AlertTriangle size={13} className="text-blue-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-blue-700 font-medium">Kiểm tra và chỉnh sửa dữ liệu bóc tách trước khi xác nhận. Bắt buộc nhấn "Xác nhận đúng" để lưu.</p>
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Họ và tên</label>
+                  <input
+                    type="text"
+                    value={editData.hoVaTen || ''}
+                    onChange={e => setEditData(d => ({ ...d, hoVaTen: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    placeholder="Nhập họ tên nếu chưa nhận diện được"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Số CCCD</label>
+                  <input
+                    type="text"
+                    value={editData.cccd || ''}
+                    onChange={e => setEditData(d => ({ ...d, cccd: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                    placeholder="12 chữ số"
+                    maxLength={12}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Ngày sinh</label>
+                    <input
+                      type="text"
+                      value={editData.ngaySinh || ''}
+                      onChange={e => setEditData(d => ({ ...d, ngaySinh: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      placeholder="DD/MM/YYYY"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Giới tính</label>
+                    <select
+                      value={editData.gioiTinh || ''}
+                      onChange={e => setEditData(d => ({ ...d, gioiTinh: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Chọn</option>
+                      <option value="Nam">Nam</option>
+                      <option value="Nữ">Nữ</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Hộ khẩu Tỉnh/TP</label>
+                  <input
+                    type="text"
+                    value={editData.hoKhauTinh || ''}
+                    onChange={e => setEditData(d => ({ ...d, hoKhauTinh: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    placeholder="VD: An Giang"
+                    list="ocr-province-list"
+                  />
+                  <datalist id="ocr-province-list">{PROVINCES.map(p => <option key={p} value={p} />)}</datalist>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleRetake}
+                  className="flex-1 py-2 border border-border rounded-xl text-sm font-medium text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw size={13} />
+                  Chụp lại
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Check size={13} />
+                  Xác nhận đúng
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** CCCDScanner: QR scan mode — opens camera, uses BarcodeDetector to scan QR on back of CCCD */
+function CCCDQRScanner({ onScanned, onClose, onSwitchOCR }: {
+  onScanned: (data: CCCDData | null) => void;
+  onClose: () => void;
+  onSwitchOCR: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -86,7 +375,6 @@ function CCCDScanner({ onScanned, onClose }: { onScanned: (data: ReturnType<type
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          // Try BarcodeDetector API first (Chrome/Android)
           if ('BarcodeDetector' in window) {
             try {
               // @ts-ignore
@@ -100,8 +388,6 @@ function CCCDScanner({ onScanned, onClose }: { onScanned: (data: ReturnType<type
               }
             } catch {}
           } else {
-            // Fallback: try to read raw text from canvas via a simple approach
-            // We'll use a hidden img + fetch jsQR dynamically
             try {
               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               // @ts-ignore
@@ -135,14 +421,13 @@ function CCCDScanner({ onScanned, onClose }: { onScanned: (data: ReturnType<type
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">
             <ScanLine size={16} className="text-primary" />
-            <span className="text-sm font-semibold">Quét CCCD gắn chip</span>
+            <span className="text-sm font-semibold">Quét QR mặt sau CCCD</span>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors"><X size={16} /></button>
         </div>
         <div className="relative bg-black aspect-video">
           <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
           <canvas ref={canvasRef} className="hidden" />
-          {/* Scan overlay */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="w-48 h-48 border-2 border-white/70 rounded-xl relative">
               <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-primary rounded-tl-lg" />
@@ -152,13 +437,52 @@ function CCCDScanner({ onScanned, onClose }: { onScanned: (data: ReturnType<type
             </div>
           </div>
         </div>
-        <div className="px-4 py-3 text-center">
+        <div className="px-4 py-3 space-y-2">
           {status === 'starting' && <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5"><Loader2 size={12} className="animate-spin" />Đang khởi động camera...</p>}
-          {status === 'scanning' && <p className="text-xs text-muted-foreground">Hướng camera vào mã QR trên mặt sau CCCD gắn chip</p>}
-          {status === 'error' && <p className="text-xs text-red-500">{errorMsg || 'Không thể truy cập camera. Vui lòng nhập tay.'}</p>}
+          {status === 'scanning' && <p className="text-xs text-muted-foreground text-center">Hướng camera vào mã QR trên mặt sau CCCD gắn chip</p>}
+          {status === 'error' && <p className="text-xs text-red-500 text-center">{errorMsg || 'Không thể truy cập camera. Vui lòng nhập tay.'}</p>}
+          <button
+            onClick={onSwitchOCR}
+            className="w-full py-2 border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Camera size={12} />
+            Mã QR bị hỏng? Chuyển sang chụp mặt trước (OCR)
+          </button>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Unified CCCD Scanner: QR primary, OCR fallback */
+function CCCDScanner({ onScanned, onClose }: {
+  onScanned: (data: CCCDData | null) => void;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<'qr' | 'ocr'>('qr');
+
+  const handleOCRConfirm = (data: Partial<CCCDData>) => {
+    // Convert partial to full CCCDData (fill missing with empty strings)
+    const full: CCCDData = {
+      cccd: data.cccd || '',
+      hoVaTen: data.hoVaTen || '',
+      ngaySinh: data.ngaySinh || '',
+      gioiTinh: data.gioiTinh || 'Nam',
+      hoKhauTinh: data.hoKhauTinh || '',
+    };
+    onScanned(full);
+  };
+
+  if (mode === 'ocr') {
+    return <CCCDOCRScanner onConfirm={handleOCRConfirm} onClose={onClose} />;
+  }
+
+  return (
+    <CCCDQRScanner
+      onScanned={onScanned}
+      onClose={onClose}
+      onSwitchOCR={() => setMode('ocr')}
+    />
   );
 }
 
@@ -168,7 +492,6 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
   const [scanSuccess, setScanSuccess] = useState(false);
   const isEdit = !!worker;
 
-  // Dynamic options from existing data
   const ktxList = [...new Set(allWorkers.map(w => w.ktx).filter(Boolean))].sort();
   const dayList = [...new Set(allWorkers.map(w => w.day).filter(Boolean))].sort();
   const platoonList = [...new Set(allWorkers.map(w => w.tieuDoan).filter(Boolean))].sort();
@@ -190,14 +513,14 @@ export default function WorkerFormModal({ worker, onSave, onClose, allWorkers = 
   const watchedCheckOut = watch('ngayRaKTX');
   const previewDays = calcSoNgay(watchedCheckIn || '', watchedCheckOut || '');
 
-  const handleScanned = (parsed: ReturnType<typeof parseCCCDQR>) => {
+  const handleScanned = (parsed: CCCDData | null) => {
     setShowScanner(false);
     if (parsed) {
-      setValue('cccd', parsed.cccd);
-      setValue('hoVaTen', parsed.hoVaTen);
-      setValue('ngaySinh', parsed.ngaySinh);
-      setValue('gioiTinh', parsed.gioiTinh as 'Nam' | 'Nữ');
-      setValue('hoKhauTinh', parsed.hoKhauTinh);
+      if (parsed.cccd) setValue('cccd', parsed.cccd);
+      if (parsed.hoVaTen) setValue('hoVaTen', parsed.hoVaTen);
+      if (parsed.ngaySinh) setValue('ngaySinh', parsed.ngaySinh);
+      if (parsed.gioiTinh) setValue('gioiTinh', parsed.gioiTinh as 'Nam' | 'Nữ');
+      if (parsed.hoKhauTinh) setValue('hoKhauTinh', parsed.hoKhauTinh);
       setScanSuccess(true);
       setTimeout(() => setScanSuccess(false), 3000);
     }
