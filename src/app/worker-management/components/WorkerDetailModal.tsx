@@ -46,7 +46,7 @@ export default function WorkerDetailModal({ worker: w, onClose, onEdit, onDelete
               {w.tieuDoan ? (
                 <span className={tieuDoanClass}>TD {w.tieuDoan}</span>
               ) : (
-                <span className="badge-pending">Chưa phân TD</span>
+                <span className="badge-pending">Chưa phân bổ</span>
               )}
               <span className="text-xs text-muted-foreground">{w.day} · Phòng {w.phongSo} · Giường {w.giuong || '—'}</span>
             </div>

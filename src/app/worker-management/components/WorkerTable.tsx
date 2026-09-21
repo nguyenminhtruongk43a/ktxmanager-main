@@ -68,9 +68,25 @@ function ProfileStatusTag({ worker }: { worker: Worker }) {
       <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Thiếu CCCD/SĐT
     </span>
   );
+  // Build specific missing field labels
+  const missing: string[] = [];
+  if (!worker.tieuDoan) missing.push('Tiểu đoàn');
+  if (!worker.ktx) missing.push('Khu KTX');
+  if (!worker.day) missing.push('Dãy nhà');
+  if (!worker.phongSo) missing.push('Phòng');
+  if (!worker.ngaySinh) missing.push('Ngày sinh');
+  if (!worker.gioiTinh) missing.push('Giới tính');
+
+  const label = missing.length > 0
+    ? `Thiếu: ${missing.slice(0, 2).join(', ')}${missing.length > 2 ? ` +${missing.length - 2}` : ''}`
+    : 'Chưa phân bổ';
+
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200">
-      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />Chưa phân phòng
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"
+      title={missing.length > 0 ? `Thiếu thông tin: ${missing.join(', ')}` : 'Chưa phân bổ đầy đủ'}
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />{label}
     </span>
   );
 }

@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { Users, LayoutGrid, Percent, AlertCircle, VenusAndMars, HardHat, Building2, ArrowRightLeft, LogIn, LogOut, RefreshCw, Search, Filter, Calendar, TrendingUp,  } from 'lucide-react';
+import { Users, LayoutGrid, Percent, AlertCircle, VenusAndMars, HardHat, Building2, ArrowRightLeft, Search, Filter, Calendar, TrendingUp, UserPlus, UserMinus } from 'lucide-react';
 import { useWorkers } from '@/context/WorkerContext';
+import { useAudit } from '@/context/AuditContext';
 import { Worker, ROOM_CAPACITY, getUniqueBuildings, getUniqueRooms, countUniqueBuildings } from '@/data/workers';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -12,7 +13,7 @@ import {
 type GenderFilter = 'all' | 'male' | 'female';
 type UnitFilter = 'all' | 'xd' | 'me' | 'vinalpha' | 'other';
 type KtxFilter = 'all' | 'KTX 1' | 'KTX 2';
-type MovementType = 'all' | 'check-in' | 'check-out' | 'room-change' | 'register';
+type MovementType = 'all' | 'tang' | 'giam' | 'import';
 type ActiveTab = 'tong-quan' | 'bien-dong';
 
 interface FilterState {
@@ -26,13 +27,10 @@ interface FilterState {
 interface MovementRecord {
   id: string;
   date: string;
-  workerName: string;
-  maNV: string;
+  dateISO: string;
+  workerInfo: string;
   type: MovementType;
-  fromRoom?: string;
-  toRoom?: string;
-  ktx: string;
-  unit: string;
+  account: string;
   note: string;
 }
 
@@ -73,61 +71,36 @@ function matchesKtx(w: Worker, k: KtxFilter): boolean {
   return w.ktx === k;
 }
 
-// ─── Mock movement data (derived from workers list) ──────────────────────────
-function generateMovementData(workers: Worker[]): MovementRecord[] {
-  const types: MovementType[] = ['check-in', 'check-out', 'room-change', 'register'];
-  const notes: Record<MovementType, string> = {
-    'check-in': 'Nhận phòng mới',
-    'check-out': 'Trả phòng / rời KTX',
-    'room-change': 'Chuyển phòng theo yêu cầu',
-    'register': 'Đăng ký lưu trú',
-    'all': '',
-  };
+/** Format ISO timestamp to YYYY-MM-DD in UTC+7 */
+function isoToDateVN(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10) || '';
+  const vnOffset = 7 * 60 * 60 * 1000;
+  const vnDate = new Date(d.getTime() + vnOffset);
+  return vnDate.toISOString().slice(0, 10);
+}
 
-  const baseDate = new Date('2026-09-01');
-  return workers.slice(0, Math.min(workers.length, 60)).map((w, i) => {
-    const d = new Date(baseDate);
-    d.setDate(d.getDate() + (i % 20));
-    const type = types[i % types.length];
-    const fromRoom = type === 'room-change' ? `${w.ktx} - Dãy A - P.${100 + (i % 10)}` : undefined;
-    const toRoom =
-      type === 'check-in' || type === 'room-change'
-        ? `${w.ktx} - ${w.day || 'Dãy 1'} - P.${w.phongSo || '101'}`
-        : undefined;
-    return {
-      id: `mv-${w.id}`,
-      date: d.toISOString().split('T')[0],
-      workerName: w.hoVaTen,
-      maNV: w.maNV,
-      type,
-      fromRoom,
-      toRoom,
-      ktx: w.ktx || 'KTX 1',
-      unit: w.donVi || '',
-      note: notes[type],
-    };
-  });
+/** Format ISO timestamp to display string in UTC+7 */
+function formatTimestampVN(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 }
 
 // ─── Movement type badge ──────────────────────────────────────────────────────
 const TYPE_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  'check-in': {
-    label: 'Nhận phòng',
+  'tang': {
+    label: 'Tăng (Thêm mới)',
     color: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    icon: <LogIn size={12} />,
+    icon: <UserPlus size={12} />,
   },
-  'check-out': {
-    label: 'Trả phòng',
+  'giam': {
+    label: 'Giảm (Xóa)',
     color: 'bg-rose-100 text-rose-700 border-rose-200',
-    icon: <LogOut size={12} />,
+    icon: <UserMinus size={12} />,
   },
-  'room-change': {
-    label: 'Chuyển phòng',
-    color: 'bg-amber-100 text-amber-700 border-amber-200',
-    icon: <RefreshCw size={12} />,
-  },
-  'register': {
-    label: 'Đăng ký',
+  'import': {
+    label: 'Import hàng loạt',
     color: 'bg-blue-100 text-blue-700 border-blue-200',
     icon: <ArrowRightLeft size={12} />,
   },
@@ -145,22 +118,23 @@ function TypeBadge({ type }: { type: string }) {
 
 // ─── Chart data builder ───────────────────────────────────────────────────────
 function buildChartData(records: MovementRecord[]) {
-  const byDate: Record<string, { date: string; 'Nhận phòng': number; 'Trả phòng': number; 'Chuyển phòng': number; 'Đăng ký': number }> = {};
+  const byDate: Record<string, { date: string; 'Tăng': number; 'Giảm': number; 'Import': number }> = {};
   records.forEach(r => {
-    if (!byDate[r.date]) {
-      byDate[r.date] = { date: r.date, 'Nhận phòng': 0, 'Trả phòng': 0, 'Chuyển phòng': 0, 'Đăng ký': 0 };
+    const dateKey = r.date;
+    if (!byDate[dateKey]) {
+      byDate[dateKey] = { date: dateKey, 'Tăng': 0, 'Giảm': 0, 'Import': 0 };
     }
-    if (r.type === 'check-in') byDate[r.date]['Nhận phòng']++;
-    if (r.type === 'check-out') byDate[r.date]['Trả phòng']++;
-    if (r.type === 'room-change') byDate[r.date]['Chuyển phòng']++;
-    if (r.type === 'register') byDate[r.date]['Đăng ký']++;
+    if (r.type === 'tang') byDate[dateKey]['Tăng']++;
+    if (r.type === 'giam') byDate[dateKey]['Giảm']++;
+    if (r.type === 'import') byDate[dateKey]['Import']++;
   });
   return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ReportDashboard() {
-  const { workers, loading } = useWorkers();
+  const { workers, loading: workersLoading } = useWorkers();
+  const { logs, loading: logsLoading } = useAudit();
   const [activeTab, setActiveTab] = useState<ActiveTab>('tong-quan');
 
   // ── Tổng quan filters ──
@@ -171,7 +145,6 @@ export default function ReportDashboard() {
   // ── Biến động filters ──
   const [mvSearch, setMvSearch] = useState('');
   const [mvType, setMvType] = useState<MovementType>('all');
-  const [mvKtx, setMvKtx] = useState<KtxFilter>('all');
   const [mvDateFrom, setMvDateFrom] = useState('');
   const [mvDateTo, setMvDateTo] = useState('');
 
@@ -221,32 +194,65 @@ export default function ReportDashboard() {
     filters.gender !== 'all' || filters.unit !== 'all' || filters.ktx !== 'all' ||
     filters.building !== '' || filters.room !== '';
 
-  // ── Biến động computed ──
-  const allMovements = useMemo(() => generateMovementData(workers), [workers]);
+  // ── Biến động: derive real movement records from audit logs ──
+  const allMovements = useMemo((): MovementRecord[] => {
+    const records: MovementRecord[] = [];
+    logs.forEach(log => {
+      const action = log.action as string;
+      let type: MovementType | null = null;
+      // Match both Vietnamese labels and English action codes stored in DB
+      if (action === 'Thêm' || action === 'CREATE') type = 'tang';
+      else if (action === 'Xóa' || action === 'DELETE') type = 'giam';
+      else if (action === 'Import' || action === 'IMPORT') type = 'import';
+      if (!type) return;
+
+      // Extract worker info from detail string
+      // Detail format: "[DD/MM/YYYY HH:mm:ss] Thêm công nhân: Nguyễn Văn A (Mã NV: NV001)"
+      // or: "[DD/MM/YYYY HH:mm:ss] Xóa công nhân: Trần Thị B (Mã NV: NV002)"
+      const detailMatch = log.detail.match(/(?:Thêm|Xóa|Import)\s+(?:công nhân[:\s]+)?(.+?)(?:\s*\(Mã NV[:\s]+[^)]+\))?(?:\s*—.*)?$/i);
+      const workerInfo = detailMatch ? detailMatch[0].replace(/^\[.*?\]\s*/, '') : log.detail.replace(/^\[.*?\]\s*/, '');
+
+      const dateISO = log.timestamp;
+      const date = isoToDateVN(dateISO);
+
+      records.push({
+        id: log.id,
+        date,
+        dateISO,
+        workerInfo,
+        type,
+        account: log.account,
+        note: log.detail.replace(/^\[.*?\]\s*/, ''),
+      });
+    });
+    // Sort newest first
+    return records.sort((a, b) => b.dateISO.localeCompare(a.dateISO));
+  }, [logs]);
 
   const filteredMovements = useMemo(() => {
     return allMovements.filter(r => {
       if (mvType !== 'all' && r.type !== mvType) return false;
-      if (mvKtx !== 'all' && r.ktx !== mvKtx) return false;
       if (mvDateFrom && r.date < mvDateFrom) return false;
       if (mvDateTo && r.date > mvDateTo) return false;
       if (mvSearch) {
         const q = mvSearch.toLowerCase();
-        if (!r.workerName.toLowerCase().includes(q) && !r.maNV.toLowerCase().includes(q)) return false;
+        if (!r.workerInfo.toLowerCase().includes(q) && !r.account.toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [allMovements, mvType, mvKtx, mvDateFrom, mvDateTo, mvSearch]);
+  }, [allMovements, mvType, mvDateFrom, mvDateTo, mvSearch]);
 
   const mvStats = useMemo(() => ({
     total: filteredMovements.length,
-    checkIn: filteredMovements.filter(r => r.type === 'check-in').length,
-    checkOut: filteredMovements.filter(r => r.type === 'check-out').length,
-    roomChange: filteredMovements.filter(r => r.type === 'room-change').length,
-    register: filteredMovements.filter(r => r.type === 'register').length,
+    tang: filteredMovements.filter(r => r.type === 'tang').length,
+    giam: filteredMovements.filter(r => r.type === 'giam').length,
+    importCount: filteredMovements.filter(r => r.type === 'import').length,
   }), [filteredMovements]);
 
-  const chartData = useMemo(() => buildChartData(filteredMovements), [filteredMovements]);
+  // Chart data: group by date (for chart, use oldest-first order)
+  const chartData = useMemo(() => buildChartData([...filteredMovements].reverse()), [filteredMovements]);
+
+  const loading = workersLoading || logsLoading;
 
   if (loading) {
     return (
@@ -263,7 +269,7 @@ export default function ReportDashboard() {
         <button
           onClick={() => setActiveTab('tong-quan')}
           className={`px-5 py-3 text-sm font-semibold rounded-t-lg transition-all ${
-            activeTab === 'tong-quan' ?'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' :'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            activeTab === 'tong-quan' ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
           }`}
         >
           📊 Tổng quan
@@ -272,7 +278,7 @@ export default function ReportDashboard() {
           onClick={() => setActiveTab('bien-dong')}
           className={`px-5 py-3 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'bien-dong'
-              ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' :'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
           }`}
         >
           🔄 Biến động
@@ -446,8 +452,14 @@ export default function ReportDashboard() {
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'bien-dong' && (
         <div className="space-y-6">
+          {/* ── Info Banner ── */}
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-700 font-medium">
+            <TrendingUp size={14} className="flex-shrink-0" />
+            Dữ liệu biến động được tổng hợp trực tiếp từ nhật ký thao tác thực tế — tự động cập nhật khi thêm mới hoặc xóa công nhân.
+          </div>
+
           {/* ── KPI Summary Cards ── */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
               <div className="p-2 bg-gray-100 rounded-lg"><ArrowRightLeft size={18} className="text-gray-600" /></div>
               <div>
@@ -456,31 +468,24 @@ export default function ReportDashboard() {
               </div>
             </div>
             <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-emerald-50 rounded-lg"><LogIn size={18} className="text-emerald-600" /></div>
+              <div className="p-2 bg-emerald-50 rounded-lg"><UserPlus size={18} className="text-emerald-600" /></div>
               <div>
-                <p className="text-xs text-emerald-600 font-semibold uppercase">Nhận phòng</p>
-                <p className="text-2xl font-extrabold text-emerald-700">{mvStats.checkIn}</p>
+                <p className="text-xs text-emerald-600 font-semibold uppercase">Tăng (Thêm mới)</p>
+                <p className="text-2xl font-extrabold text-emerald-700">{mvStats.tang}</p>
               </div>
             </div>
             <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-rose-50 rounded-lg"><LogOut size={18} className="text-rose-600" /></div>
+              <div className="p-2 bg-rose-50 rounded-lg"><UserMinus size={18} className="text-rose-600" /></div>
               <div>
-                <p className="text-xs text-rose-600 font-semibold uppercase">Trả phòng</p>
-                <p className="text-2xl font-extrabold text-rose-700">{mvStats.checkOut}</p>
+                <p className="text-xs text-rose-600 font-semibold uppercase">Giảm (Xóa)</p>
+                <p className="text-2xl font-extrabold text-rose-700">{mvStats.giam}</p>
               </div>
             </div>
             <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-amber-50 rounded-lg"><RefreshCw size={18} className="text-amber-600" /></div>
+              <div className="p-2 bg-blue-50 rounded-lg"><ArrowRightLeft size={18} className="text-blue-600" /></div>
               <div>
-                <p className="text-xs text-amber-600 font-semibold uppercase">Chuyển phòng</p>
-                <p className="text-2xl font-extrabold text-amber-700">{mvStats.roomChange}</p>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-blue-50 rounded-lg"><TrendingUp size={18} className="text-blue-600" /></div>
-              <div>
-                <p className="text-xs text-blue-600 font-semibold uppercase">Đăng ký</p>
-                <p className="text-2xl font-extrabold text-blue-700">{mvStats.register}</p>
+                <p className="text-xs text-blue-600 font-semibold uppercase">Import hàng loạt</p>
+                <p className="text-2xl font-extrabold text-blue-700">{mvStats.importCount}</p>
               </div>
             </div>
           </div>
@@ -499,10 +504,9 @@ export default function ReportDashboard() {
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="Nhận phòng" fill="#10b981" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Trả phòng" fill="#f43f5e" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Chuyển phòng" fill="#f59e0b" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Đăng ký" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Tăng" fill="#10b981" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Giảm" fill="#f43f5e" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Import" fill="#3b82f6" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -513,12 +517,12 @@ export default function ReportDashboard() {
             <div className="flex flex-wrap gap-3 items-end">
               {/* Search */}
               <div className="flex flex-col gap-1 min-w-[200px] flex-1">
-                <label className="text-sm font-medium text-gray-700 mb-1">Tìm kiếm công nhân</label>
+                <label className="text-sm font-medium text-gray-700 mb-1">Tìm kiếm</label>
                 <div className="relative">
                   <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
-                    placeholder="Tên hoặc mã nhân viên..."
+                    placeholder="Tên công nhân hoặc tài khoản..."
                     value={mvSearch}
                     onChange={e => setMvSearch(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -527,26 +531,14 @@ export default function ReportDashboard() {
               </div>
 
               {/* Type */}
-              <div className="flex flex-col gap-1 min-w-[150px]">
+              <div className="flex flex-col gap-1 min-w-[160px]">
                 <label className="text-sm font-medium text-gray-700 mb-1">Loại biến động</label>
                 <select value={mvType} onChange={e => setMvType(e.target.value as MovementType)}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
                   <option value="all">Tất cả loại</option>
-                  <option value="check-in">Nhận phòng</option>
-                  <option value="check-out">Trả phòng</option>
-                  <option value="room-change">Chuyển phòng</option>
-                  <option value="register">Đăng ký</option>
-                </select>
-              </div>
-
-              {/* KTX */}
-              <div className="flex flex-col gap-1 min-w-[120px]">
-                <label className="text-sm font-medium text-gray-700 mb-1">KTX</label>
-                <select value={mvKtx} onChange={e => setMvKtx(e.target.value as KtxFilter)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-                  <option value="all">Tất cả KTX</option>
-                  <option value="KTX 1">KTX 1</option>
-                  <option value="KTX 2">KTX 2</option>
+                  <option value="tang">Tăng (Thêm mới)</option>
+                  <option value="giam">Giảm (Xóa)</option>
+                  <option value="import">Import hàng loạt</option>
                 </select>
               </div>
 
@@ -565,11 +557,11 @@ export default function ReportDashboard() {
               </div>
 
               {/* Clear */}
-              {(mvSearch || mvType !== 'all' || mvKtx !== 'all' || mvDateFrom || mvDateTo) && (
+              {(mvSearch || mvType !== 'all' || mvDateFrom || mvDateTo) && (
                 <div className="flex flex-col gap-1">
                   <label className="text-sm font-medium text-gray-700 mb-1 opacity-0">x</label>
                   <button
-                    onClick={() => { setMvSearch(''); setMvType('all'); setMvKtx('all'); setMvDateFrom(''); setMvDateTo(''); }}
+                    onClick={() => { setMvSearch(''); setMvType('all'); setMvDateFrom(''); setMvDateTo(''); }}
                     className="px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-all">
                     ✕ Xóa lọc
                   </button>
@@ -591,7 +583,10 @@ export default function ReportDashboard() {
             {filteredMovements.length === 0 ? (
               <div className="py-16 text-center text-gray-400">
                 <ArrowRightLeft size={36} className="mx-auto mb-3 opacity-30" />
-                <p className="text-sm font-medium">Không có dữ liệu biến động phù hợp</p>
+                <p className="text-sm font-medium">
+                  {allMovements.length === 0
+                    ? 'Chưa có dữ liệu biến động — sẽ tự động ghi nhận khi thêm hoặc xóa công nhân' :'Không có dữ liệu biến động phù hợp với bộ lọc'}
+                </p>
                 <p className="text-xs mt-1">Thử thay đổi bộ lọc hoặc khoảng thời gian</p>
               </div>
             ) : (
@@ -599,27 +594,21 @@ export default function ReportDashboard() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b">
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Ngày</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Họ và tên</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Mã NV</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Thời gian</th>
                       <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Loại biến động</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">KTX</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Phòng đi</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Phòng đến</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Ghi chú</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">Chi tiết</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Tài khoản thực hiện</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {filteredMovements.map((r, idx) => (
                       <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-50/30'}`}>
-                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap font-mono text-xs">{r.date}</td>
-                        <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{r.workerName}</td>
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap font-mono text-xs">{r.maNV}</td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap font-mono text-xs">
+                          {formatTimestampVN(r.dateISO)}
+                        </td>
                         <td className="px-4 py-3 whitespace-nowrap"><TypeBadge type={r.type} /></td>
-                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{r.ktx}</td>
-                        <td className="px-4 py-3 text-gray-400 whitespace-nowrap text-xs">{r.fromRoom || '—'}</td>
-                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{r.toRoom || '—'}</td>
-                        <td className="px-4 py-3 text-gray-500 text-xs">{r.note}</td>
+                        <td className="px-4 py-3 text-gray-700 text-xs max-w-sm">{r.note}</td>
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs font-medium">{r.account}</td>
                       </tr>
                     ))}
                   </tbody>
