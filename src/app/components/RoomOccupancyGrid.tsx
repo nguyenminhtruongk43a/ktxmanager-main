@@ -1,9 +1,10 @@
 'use client';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ROOM_CAPACITY } from '@/data/workers';
 import { useWorkers } from '@/context/WorkerContext';
 import { Users } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { createClient } from '@/lib/supabase/client';
 
 const RoomDrawer = dynamic(() => import('./RoomDrawer'), { ssr: false });
 
@@ -28,11 +29,33 @@ interface BuildingGroup {
   key: string; // "KTX 1|Dãy 3"
 }
 
+/** Admin-assigned unit label per room */
+interface RoomUnitAssignment {
+  ktx: string;
+  day: string;
+  phong_so: string;
+  don_vi: string;
+}
+
 export default function RoomOccupancyGrid() {
   const { workers } = useWorkers();
   const [selectedKtx, setSelectedKtx] = useState<string | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<string | null>(null);
   const [drawerRoom, setDrawerRoom] = useState<{ ktx: string; building: string; room: string } | null>(null);
+  const [roomUnitAssignments, setRoomUnitAssignments] = useState<RoomUnitAssignment[]>([]);
+
+  // Fetch admin-assigned unit labels from Supabase
+  const fetchRoomUnitAssignments = useCallback(async () => {
+    const supabase = createClient();
+    const { data } = await supabase
+      .from('room_unit_assignments')
+      .select('ktx, day, phong_so, don_vi');
+    if (data) setRoomUnitAssignments(data as RoomUnitAssignment[]);
+  }, []);
+
+  useEffect(() => {
+    fetchRoomUnitAssignments();
+  }, [fetchRoomUnitAssignments]);
 
   // Build unique KTX list
   const ktxList = useMemo(() => {
@@ -83,6 +106,29 @@ export default function RoomOccupancyGrid() {
     });
   };
 
+  /**
+   * Get display unit label for a room:
+   * 1. Admin-assigned label (priority)
+   * 2. Auto-detected from workers: single unit name or "Đa đơn vị"
+   */
+  const getRoomUnitLabel = useCallback((ktx: string, building: string, room: string): string | null => {
+    // Priority 1: admin-assigned
+    const assigned = roomUnitAssignments.find(
+      a => a.ktx === ktx && a.day === building && a.phong_so === room
+    );
+    if (assigned) return assigned.don_vi;
+
+    // Priority 2: auto-detect from workers
+    const roomWorkers = workers.filter(
+      w => w.ktx === ktx && w.day === building && w.phongSo === room && w.donVi
+    );
+    if (roomWorkers.length === 0) return null;
+    const units = [...new Set(roomWorkers.map(w => w.donVi).filter(Boolean))];
+    if (units.length === 1) return units[0] as string;
+    if (units.length > 1) return 'Đa đơn vị';
+    return null;
+  }, [roomUnitAssignments, workers]);
+
   const drawerWorkers = useMemo(() => {
     if (!drawerRoom) return [];
     return workers.filter(w =>
@@ -96,6 +142,15 @@ export default function RoomOccupancyGrid() {
   const allBuildings = useMemo(() => {
     return [...new Set(buildingGroups.map(g => g.building))].sort();
   }, [buildingGroups]);
+
+  // Get admin-assigned unit for drawer room
+  const drawerAdminUnit = useMemo(() => {
+    if (!drawerRoom) return undefined;
+    const a = roomUnitAssignments.find(
+      x => x.ktx === drawerRoom.ktx && x.day === drawerRoom.building && x.phong_so === drawerRoom.room
+    );
+    return a?.don_vi;
+  }, [drawerRoom, roomUnitAssignments]);
 
   return (
     <>
@@ -175,6 +230,10 @@ export default function RoomOccupancyGrid() {
                     const pct = count / ROOM_CAPACITY;
                     const roomClass = getRoomClass(pct);
                     const barColor = getRoomBarColor(pct);
+                    const unitLabel = getRoomUnitLabel(group.ktx, group.building, room);
+                    const isAdminAssigned = roomUnitAssignments.some(
+                      a => a.ktx === group.ktx && a.day === group.building && a.phong_so === room
+                    );
                     return (
                       <div
                         key={`room-${group.key}-${room}`}
@@ -192,6 +251,14 @@ export default function RoomOccupancyGrid() {
                           <Users size={10} className="text-muted-foreground" />
                           <span className="text-xs text-muted-foreground">{Math.round(pct * 100)}% đầy</span>
                         </div>
+                        {unitLabel && (
+                          <div className="mt-1.5">
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold truncate max-w-full ${isAdminAssigned ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'}`}>
+                              {isAdminAssigned && <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />}
+                              {unitLabel}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -214,16 +281,28 @@ export default function RoomOccupancyGrid() {
               <span className="text-xs text-muted-foreground">{leg.label}</span>
             </div>
           ))}
+          <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-indigo-200" />
+            <span className="text-xs text-muted-foreground">Đơn vị (Admin gán)</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-sm bg-teal-200" />
+            <span className="text-xs text-muted-foreground">Đơn vị (Tự động)</span>
+          </div>
         </div>
       </div>
 
       {/* Room Drawer */}
       {drawerRoom && (
         <RoomDrawer
+          ktx={drawerRoom.ktx}
           building={`${drawerRoom.ktx ? drawerRoom.ktx + ' · ' : ''}${drawerRoom.building}`}
+          buildingRaw={drawerRoom.building}
           room={drawerRoom.room}
           workers={drawerWorkers}
+          adminAssignedUnit={drawerAdminUnit}
           onClose={() => setDrawerRoom(null)}
+          onUnitUpdated={fetchRoomUnitAssignments}
         />
       )}
     </>

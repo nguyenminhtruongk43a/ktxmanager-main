@@ -1,13 +1,19 @@
 'use client';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Worker, calcSoNgay, getProfileStatus } from '@/data/workers';
-import { X, Users, Phone, CreditCard, MapPin, Calendar } from 'lucide-react';
+import { X, Users, Phone, CreditCard, MapPin, Calendar, Building2, Pencil, Check, Trash2 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/context/AuthContext';
 
 interface Props {
+  ktx: string;
   building: string;
+  buildingRaw: string;
   room: string;
   workers: Worker[];
+  adminAssignedUnit?: string;
   onClose: () => void;
+  onUnitUpdated?: () => void;
 }
 
 function StatusDot({ worker }: { worker: Worker }) {
@@ -17,12 +23,76 @@ function StatusDot({ worker }: { worker: Worker }) {
   return <span className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" title="Chưa phân phòng" />;
 }
 
-export default function RoomDrawer({ building, room, workers, onClose }: Props) {
+export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, onClose, onUnitUpdated }: Props) {
+  const { isAdmin } = useAuth();
+  const [isEditingUnit, setIsEditingUnit] = useState(false);
+  const [unitInput, setUnitInput] = useState(adminAssignedUnit ?? '');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUnitInput(adminAssignedUnit ?? '');
+  }, [adminAssignedUnit]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  const handleSaveUnit = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const supabase = createClient();
+      const trimmed = unitInput.trim();
+      if (trimmed === '') {
+        // Delete assignment if empty
+        await supabase
+          .from('room_unit_assignments')
+          .delete()
+          .eq('ktx', ktx)
+          .eq('day', buildingRaw)
+          .eq('phong_so', room);
+      } else {
+        // Upsert assignment
+        const { error } = await supabase
+          .from('room_unit_assignments')
+          .upsert(
+            { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed, updated_at: new Date().toISOString() },
+            { onConflict: 'ktx,day,phong_so' }
+          );
+        if (error) throw error;
+      }
+      setIsEditingUnit(false);
+      onUnitUpdated?.();
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Lỗi lưu đơn vị');
+    } finally {
+      setSaving(false);
+    }
+  }, [ktx, buildingRaw, room, unitInput, onUnitUpdated]);
+
+  const handleRemoveUnit = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const supabase = createClient();
+      await supabase
+        .from('room_unit_assignments')
+        .delete()
+        .eq('ktx', ktx)
+        .eq('day', buildingRaw)
+        .eq('phong_so', room);
+      setUnitInput('');
+      setIsEditingUnit(false);
+      onUnitUpdated?.();
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Lỗi xóa đơn vị');
+    } finally {
+      setSaving(false);
+    }
+  }, [ktx, buildingRaw, room, onUnitUpdated]);
 
   return (
     <>
@@ -39,6 +109,81 @@ export default function RoomDrawer({ building, room, workers, onClose }: Props) 
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
             <X size={16} />
           </button>
+        </div>
+
+        {/* Unit assignment section */}
+        <div className="px-5 py-3 border-b border-border bg-indigo-50/50">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <Building2 size={14} className="text-indigo-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-indigo-700 flex-shrink-0">Đơn vị:</span>
+              {isEditingUnit ? (
+                <input
+                  type="text"
+                  value={unitInput}
+                  onChange={e => setUnitInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveUnit(); if (e.key === 'Escape') setIsEditingUnit(false); }}
+                  placeholder="Nhập tên đơn vị..."
+                  className="flex-1 min-w-0 text-xs border border-indigo-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  autoFocus
+                  disabled={saving}
+                />
+              ) : (
+                <span className={`text-xs truncate ${adminAssignedUnit ? 'font-semibold text-indigo-700' : 'text-muted-foreground italic'}`}>
+                  {adminAssignedUnit || 'Chưa gán đơn vị cố định'}
+                </span>
+              )}
+            </div>
+            {isAdmin && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {isEditingUnit ? (
+                  <>
+                    <button
+                      onClick={handleSaveUnit}
+                      disabled={saving}
+                      className="p-1.5 rounded hover:bg-indigo-100 text-indigo-600 transition-colors disabled:opacity-50"
+                      title="Lưu"
+                    >
+                      <Check size={14} />
+                    </button>
+                    {adminAssignedUnit && (
+                      <button
+                        onClick={handleRemoveUnit}
+                        disabled={saving}
+                        className="p-1.5 rounded hover:bg-red-100 text-red-500 transition-colors disabled:opacity-50"
+                        title="Xóa gán đơn vị"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { setIsEditingUnit(false); setUnitInput(adminAssignedUnit ?? ''); setSaveError(null); }}
+                      className="p-1.5 rounded hover:bg-muted text-muted-foreground transition-colors"
+                      title="Hủy"
+                    >
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setIsEditingUnit(true)}
+                    className="p-1.5 rounded hover:bg-indigo-100 text-indigo-500 transition-colors"
+                    title="Chỉnh sửa đơn vị"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {saveError && <p className="text-xs text-red-500 mt-1">{saveError}</p>}
+          {isAdmin && !isEditingUnit && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {adminAssignedUnit
+                ? 'Đơn vị do Admin gán cố định. Nhấn bút chì để chỉnh sửa.'
+                : 'Nhấn bút chì để gán đơn vị cố định cho phòng này.'}
+            </p>
+          )}
         </div>
 
         {/* Legend */}
