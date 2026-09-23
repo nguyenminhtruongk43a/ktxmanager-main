@@ -35,6 +35,7 @@ interface RoomUnitAssignment {
   day_nha: string;
   phong_so: string;
   unit: string;
+  room_label?: string | null;
 }
 
 export default function RoomOccupancyGrid() {
@@ -50,7 +51,7 @@ export default function RoomOccupancyGrid() {
 
     const { data, error } = await supabase
       .from('room_units')
-      .select('ktx, day_nha, phong_so, unit');
+      .select('ktx, day_nha, phong_so, unit, room_label');
 
     if (error) {
       console.error('[RoomOccupancyGrid] Lỗi tải room_units:', error);
@@ -161,20 +162,44 @@ export default function RoomOccupancyGrid() {
     return a?.unit;
   }, [drawerRoom, roomUnitAssignments]);
 
+  // Get room_label for drawer room
+  const drawerRoomLabel = useMemo(() => {
+    if (!drawerRoom) return null;
+    const a = roomUnitAssignments.find(
+      x => x.ktx === drawerRoom.ktx && x.day_nha === drawerRoom.building && x.phong_so === drawerRoom.room
+    );
+    return a?.room_label ?? null;
+  }, [drawerRoom, roomUnitAssignments]);
+
   // Optimistically update roomUnitAssignments after admin saves a unit
   const handleUnitUpdated = useCallback((newUnit: string | null) => {
     if (!drawerRoom) return;
     const { ktx, building: day_nha, room: phong_so } = drawerRoom;
     setRoomUnitAssignments(prev => {
+      const existing = prev.find(a => a.ktx === ktx && a.day_nha === day_nha && a.phong_so === phong_so);
       const filtered = prev.filter(
         a => !(a.ktx === ktx && a.day_nha === day_nha && a.phong_so === phong_so)
       );
       if (newUnit) {
-        return [...filtered, { ktx, day_nha, phong_so, unit: newUnit }];
+        return [...filtered, { ktx, day_nha, phong_so, unit: newUnit, room_label: existing?.room_label ?? null }];
       }
       return filtered;
     });
     // Background re-fetch to stay in sync with DB
+    fetchRoomUnitAssignments();
+  }, [drawerRoom, fetchRoomUnitAssignments]);
+
+  // Optimistically update room_label after admin saves it
+  const handleRoomLabelUpdated = useCallback((newLabel: string | null) => {
+    if (!drawerRoom) return;
+    const { ktx, building: day_nha, room: phong_so } = drawerRoom;
+    setRoomUnitAssignments(prev => {
+      const existing = prev.find(a => a.ktx === ktx && a.day_nha === day_nha && a.phong_so === phong_so);
+      const filtered = prev.filter(
+        a => !(a.ktx === ktx && a.day_nha === day_nha && a.phong_so === phong_so)
+      );
+      return [...filtered, { ktx, day_nha, phong_so, unit: existing?.unit ?? '', room_label: newLabel }];
+    });
     fetchRoomUnitAssignments();
   }, [drawerRoom, fetchRoomUnitAssignments]);
 
@@ -330,8 +355,10 @@ export default function RoomOccupancyGrid() {
           room={drawerRoom.room}
           workers={drawerWorkers}
           adminAssignedUnit={drawerAdminUnit}
+          roomLabel={drawerRoomLabel}
           onClose={() => setDrawerRoom(null)}
           onUnitUpdated={handleUnitUpdated}
+          onRoomLabelUpdated={handleRoomLabelUpdated}
         />
       )}
     </>

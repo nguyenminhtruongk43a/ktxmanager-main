@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState, useCallback } from 'react';
 import { Worker, calcSoNgay, getProfileStatus } from '@/data/workers';
-import { X, Users, Phone, CreditCard, MapPin, Calendar, Building2, Pencil, Check, Trash2 } from 'lucide-react';
+import { X, Users, Phone, CreditCard, MapPin, Calendar, Tag } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/context/AuthContext';
 
@@ -12,8 +12,10 @@ interface Props {
   room: string;
   workers: Worker[];
   adminAssignedUnit?: string;
+  roomLabel?: string | null;
   onClose: () => void;
   onUnitUpdated?: (newUnit: string | null) => void;
+  onRoomLabelUpdated?: (newLabel: string | null) => void;
 }
 
 function StatusDot({ worker }: { worker: Worker }) {
@@ -23,20 +25,20 @@ function StatusDot({ worker }: { worker: Worker }) {
   return <span className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" title="Chưa phân phòng" />;
 }
 
-export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, onClose, onUnitUpdated }: Props) {
+export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, roomLabel, onClose, onUnitUpdated, onRoomLabelUpdated }: Props) {
   const { isAdmin } = useAuth();
-  const [isEditingUnit, setIsEditingUnit] = useState(false);
-  const [unitInput, setUnitInput] = useState(adminAssignedUnit ?? '');
-  // Local display value — updated optimistically after save
-  const [localUnit, setLocalUnit] = useState<string | null>(adminAssignedUnit ?? null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // --- Room Label state ---
+  const [labelInput, setLabelInput] = useState(roomLabel ?? '');
+  const [localLabel, setLocalLabel] = useState<string | null>(roomLabel ?? null);
+  const [savingLabel, setSavingLabel] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
+  const [labelSuccess, setLabelSuccess] = useState(false);
 
   useEffect(() => {
-    setUnitInput(adminAssignedUnit ?? '');
-    setLocalUnit(adminAssignedUnit ?? null);
-  }, [adminAssignedUnit]);
+    setLabelInput(roomLabel ?? '');
+    setLocalLabel(roomLabel ?? null);
+  }, [roomLabel]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -44,122 +46,59 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  /**
-   * Resolve the effective day_nha value to write to Supabase.
-   * Priority:
-   *  1. buildingRaw prop (direct raw value)
-   *  2. Extract from building prop by stripping KTX prefix (e.g. "KTX 1 · Dãy 5" → "Dãy 5")
-   *  3. Extract from drawer title string (e.g. "Dãy 5 — Phòng 12" → "Dãy 5")
-   *  4. Use building prop as-is
-   */
+  /** Resolve the effective day_nha value for Supabase queries */
   const resolveEffectiveDayNha = useCallback((): string => {
     if (buildingRaw && buildingRaw.trim()) return buildingRaw.trim();
-
-    // Try stripping KTX prefix from building prop: "KTX 1 · Dãy 5" → "Dãy 5"
     if (building && building.trim()) {
       const afterDot = building.match(/·\s*(.+)$/);
       if (afterDot) return afterDot[1].trim();
-      // If no dot separator, use building as-is
       return building.trim();
     }
-
-    // Fallback: extract from title pattern "Dãy X — Phòng Y"
     const titleMatch = building.match(/^(Dãy\s*\S+)/i);
     if (titleMatch) return titleMatch[1].trim();
-
     return building || '';
   }, [buildingRaw, building]);
 
-  const handleSaveUnit = useCallback(async () => {
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
+  /** Save room_label directly to room_units table */
+  const handleSaveRoomLabel = useCallback(async () => {
+    setSavingLabel(true);
+    setLabelError(null);
+    setLabelSuccess(false);
     try {
       const supabase = createClient();
-      const trimmed = unitInput.trim();
+      const trimmed = labelInput.trim();
       const effectiveDayNha = resolveEffectiveDayNha();
-
-      console.log('[RoomDrawer] handleSaveUnit →', { ktx, day_nha: effectiveDayNha, phong_so: room, unit: trimmed });
-
-      if (trimmed === '') {
-        // Delete from room_units
-        const { error: deleteError } = await supabase
-          .from('room_units')
-          .delete()
-          .eq('ktx', ktx)
-          .eq('day_nha', effectiveDayNha)
-          .eq('phong_so', room);
-
-        if (deleteError) {
-          console.error('[RoomDrawer] Lỗi xóa đơn vị từ room_units:', deleteError);
-          throw new Error(`Lỗi xóa đơn vị: ${deleteError.message || JSON.stringify(deleteError)}`);
-        }
-
-        setLocalUnit(null);
-        onUnitUpdated?.(null);
-      } else {
-        // Upsert into room_units using UNIQUE constraint on (ktx, day_nha, phong_so)
-        const { error: upsertError } = await supabase
-          .from('room_units')
-          .upsert(
-            { ktx, day_nha: effectiveDayNha, phong_so: room, unit: trimmed, updated_at: new Date().toISOString() },
-            { onConflict: 'ktx,day_nha,phong_so' }
-          );
-
-        if (upsertError) {
-          console.error('[RoomDrawer] Lỗi upsert đơn vị vào room_units:', upsertError);
-          throw new Error(`Lỗi lưu đơn vị: ${upsertError.message || JSON.stringify(upsertError)}`);
-        }
-
-        setLocalUnit(trimmed);
-        onUnitUpdated?.(trimmed);
-      }
-
-      setIsEditingUnit(false);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[RoomDrawer] handleSaveUnit thất bại:', msg);
-      setSaveError(msg || 'Lỗi lưu đơn vị — vui lòng thử lại');
-    } finally {
-      setSaving(false);
-    }
-  }, [ktx, resolveEffectiveDayNha, room, unitInput, onUnitUpdated]);
-
-  const handleRemoveUnit = useCallback(async () => {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const supabase = createClient();
-      const effectiveDayNha = resolveEffectiveDayNha();
-
-      console.log('[RoomDrawer] handleRemoveUnit →', { ktx, day_nha: effectiveDayNha, phong_so: room });
 
       const { error } = await supabase
         .from('room_units')
-        .delete()
-        .eq('ktx', ktx)
-        .eq('day_nha', effectiveDayNha)
-        .eq('phong_so', room);
+        .upsert(
+          {
+            ktx,
+            day_nha: effectiveDayNha,
+            phong_so: room,
+            unit: adminAssignedUnit ?? '',
+            room_label: trimmed || null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'ktx,day_nha,phong_so' }
+        );
 
       if (error) {
-        console.error('[RoomDrawer] Lỗi xóa đơn vị từ room_units:', error);
-        throw new Error(`Lỗi xóa đơn vị: ${error.message || JSON.stringify(error)}`);
+        throw new Error(`Lỗi lưu tên phòng: ${error.message}`);
       }
 
-      setUnitInput('');
-      setLocalUnit(null);
-      setIsEditingUnit(false);
-      onUnitUpdated?.(null);
+      const newLabel = trimmed || null;
+      setLocalLabel(newLabel);
+      onRoomLabelUpdated?.(newLabel);
+      setLabelSuccess(true);
+      setTimeout(() => setLabelSuccess(false), 2500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[RoomDrawer] handleRemoveUnit thất bại:', msg);
-      setSaveError(msg || 'Lỗi xóa đơn vị');
+      setLabelError(msg || 'Lỗi lưu tên phòng — vui lòng thử lại');
     } finally {
-      setSaving(false);
+      setSavingLabel(false);
     }
-  }, [ktx, resolveEffectiveDayNha, room, onUnitUpdated]);
+  }, [ktx, room, labelInput, adminAssignedUnit, resolveEffectiveDayNha, onRoomLabelUpdated]);
 
   return (
     <>
@@ -170,89 +109,50 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-primary/5">
           <div>
-            <h2 className="text-base font-bold text-foreground">{building} — Phòng {room}</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">{workers.length} công nhân</p>
+            <h2 className="text-base font-bold text-foreground">
+              {localLabel ? localLabel : `${building} — Phòng ${room}`}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {building} — Phòng {room} · {workers.length} công nhân
+            </p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
             <X size={16} />
           </button>
         </div>
 
-        {/* Unit assignment section */}
-        <div className="px-5 py-3 border-b border-border bg-indigo-50/50">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <Building2 size={14} className="text-indigo-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-indigo-700 flex-shrink-0">Đơn vị:</span>
-              {isEditingUnit ? (
-                <input
-                  type="text"
-                  value={unitInput}
-                  onChange={e => setUnitInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleSaveUnit(); if (e.key === 'Escape') setIsEditingUnit(false); }}
-                  placeholder="Nhập tên đơn vị..."
-                  className="flex-1 min-w-0 text-xs border border-indigo-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                  autoFocus
-                  disabled={saving}
-                />
-              ) : (
-                <span className={`text-xs truncate ${localUnit ? 'font-semibold text-indigo-700' : 'text-muted-foreground italic'}`}>
-                  {localUnit || 'Chưa gán đơn vị cố định'}
-                </span>
-              )}
+        {/* Room Label section */}
+        {isAdmin && (
+          <div className="px-5 py-3 border-b border-border bg-violet-50/50">
+            <div className="flex items-center gap-2 mb-2">
+              <Tag size={13} className="text-violet-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-violet-700">Tên/Nhãn phòng tùy chỉnh</span>
             </div>
-            {isAdmin && (
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {isEditingUnit ? (
-                  <>
-                    <button
-                      onClick={handleSaveUnit}
-                      disabled={saving}
-                      className="p-1.5 rounded hover:bg-indigo-100 text-indigo-600 transition-colors disabled:opacity-50"
-                      title="Lưu"
-                    >
-                      <Check size={14} />
-                    </button>
-                    {localUnit && (
-                      <button
-                        onClick={handleRemoveUnit}
-                        disabled={saving}
-                        className="p-1.5 rounded hover:bg-red-100 text-red-500 transition-colors disabled:opacity-50"
-                        title="Xóa gán đơn vị"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => { setIsEditingUnit(false); setUnitInput(localUnit ?? ''); setSaveError(null); }}
-                      className="p-1.5 rounded hover:bg-muted text-muted-foreground transition-colors"
-                      title="Hủy"
-                    >
-                      <X size={14} />
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => setIsEditingUnit(true)}
-                    className="p-1.5 rounded hover:bg-indigo-100 text-indigo-500 transition-colors"
-                    title="Chỉnh sửa đơn vị"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                )}
-              </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={labelInput}
+                onChange={e => setLabelInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleSaveRoomLabel(); }}
+                placeholder={`Ví dụ: Phòng Đại đội 5...`}
+                className="flex-1 min-w-0 text-xs border border-violet-300 rounded px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 disabled:opacity-50"
+                disabled={savingLabel}
+              />
+              <button
+                onClick={handleSaveRoomLabel}
+                disabled={savingLabel}
+                className="flex-shrink-0 px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                {savingLabel ? 'Đang lưu...' : 'Lưu tên phòng'}
+              </button>
+            </div>
+            {labelError && <p className="text-xs text-red-500 mt-1">{labelError}</p>}
+            {labelSuccess && <p className="text-xs text-green-600 mt-1">✓ Đã lưu tên phòng thành công!</p>}
+            {localLabel && (
+              <p className="text-[10px] text-violet-600 mt-1">Tên hiện tại: <span className="font-semibold">{localLabel}</span></p>
             )}
           </div>
-          {saveError && <p className="text-xs text-red-500 mt-1">{saveError}</p>}
-          {saveSuccess && <p className="text-xs text-green-600 mt-1">✓ Lưu đơn vị thành công!</p>}
-          {isAdmin && !isEditingUnit && (
-            <p className="text-[10px] text-muted-foreground mt-1">
-              {localUnit
-                ? 'Đơn vị do Admin gán cố định. Nhấn bút chì để chỉnh sửa.'
-                : 'Nhấn bút chì để gán đơn vị cố định cho phòng này.'}
-            </p>
-          )}
-        </div>
+        )}
 
         {/* Legend */}
         <div className="flex items-center gap-4 px-5 py-2 border-b border-border bg-muted/30 text-xs text-muted-foreground">
