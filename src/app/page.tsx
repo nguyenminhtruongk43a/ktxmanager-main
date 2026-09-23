@@ -27,11 +27,12 @@ function getRoomHeatColor(count: number, capacity: number): { bg: string; border
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────
 function KPICard({
-  label, value, sub, icon: Icon, color, alert, onClick, badge
+  label, value, sub, icon: Icon, color, alert, onClick, badge, extraRows
 }: {
   label: string; value: string | number; sub?: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   color: string; alert?: boolean; onClick?: () => void; badge?: string;
+  extraRows?: React.ReactNode;
 }) {
   return (
     <div
@@ -52,6 +53,7 @@ function KPICard({
             {badge}
           </span>
         )}
+        {extraRows}
       </div>
     </div>
   );
@@ -186,12 +188,13 @@ function RoomTooltip({ workers, room, onClose }: {
 // ─── Heatmap Room Cell ─────────────────────────────────────────────────────
 // Workers prop is already scoped to ktx+building by parent — no extra filtering needed
 function HeatmapRoomCell({
-  room, count, capacity, ktx, building, workers, onClickRoom
+  room, count, capacity, ktx, building, workers, onClickRoom, unitName
 }: {
   room: string; count: number; capacity: number;
   ktx: string; building: string;
   workers: { hoVaTen: string; maNV: string }[];
   onClickRoom: (ktx: string, building: string, room: string) => void;
+  unitName?: string;
 }) {
   const [showTooltip, setShowTooltip] = useState(false);
   const { bg, border, label, dot } = getRoomHeatColor(count, capacity);
@@ -210,6 +213,9 @@ function HeatmapRoomCell({
         </div>
         <p className="text-xs font-tabular font-semibold text-foreground">{count}/{capacity}</p>
         <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+        {unitName && (
+          <p className="text-[10px] font-semibold text-blue-700 bg-blue-50 rounded px-1 py-0.5 mt-1 truncate" title={unitName}>{unitName}</p>
+        )}
       </div>
       {showTooltip && (
         <RoomTooltip workers={workers} room={room} onClose={() => setShowTooltip(false)} />
@@ -275,6 +281,10 @@ export default function OccupancyDashboardPage() {
   const [blockAssignments, setBlockAssignments] = useState<BlockAssignment[]>([]);
   // Quick-add modal state
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  // Room unit map: "ktx||building||room" -> don_vi
+  const [roomUnitMap, setRoomUnitMap] = useState<Record<string, string>>({});
+  // KTX capacity for vacant bed calculation
+  const [ktxCapacity, setKtxCapacity] = useState<{ ktx1Total: number; ktx2Total: number }>({ ktx1Total: 0, ktx2Total: 0 });
 
   const isEmpty = !loading && workers.length === 0;
 
@@ -309,6 +319,37 @@ export default function OccupancyDashboardPage() {
         setBlockAssignments(assignments);
       });
   }, []);
+
+  // ── Load room → don_vi mapping ─────────────────────────────────────────────
+  useEffect(() => {
+    const supabase = createClient();
+    const fetchRoomUnits = async () => {
+      let allData: { ktx: string; day: string; phong_so: string; don_vi: string }[] = [];
+      let from = 0;
+      const SIZE = 1000;
+      let hasMore = true;
+      while (hasMore) {
+        const { data: batch } = await supabase
+          .from('workers')
+          .select('ktx, day, phong_so, don_vi')
+          .not('phong_so', 'is', null)
+          .not('don_vi', 'is', null)
+          .range(from, from + SIZE - 1);
+        if (!batch || batch.length === 0) { hasMore = false; break; }
+        allData = allData.concat(batch as { ktx: string; day: string; phong_so: string; don_vi: string }[]);
+        if (batch.length < SIZE) hasMore = false; else from += SIZE;
+      }
+      // Build map: first non-empty don_vi wins per room
+      const map: Record<string, string> = {};
+      allData.forEach(row => {
+        if (!row.ktx || !row.day || !row.phong_so || !row.don_vi?.trim()) return;
+        const key = `${row.ktx}||${row.day}||${row.phong_so}`;
+        if (!map[key]) map[key] = row.don_vi.trim();
+      });
+      setRoomUnitMap(map);
+    };
+    fetchRoomUnits();
+  }, [workers.length]);
 
   // Track workers length to trigger stats re-fetch when data changes
   const workersLength = workers.length;
@@ -393,6 +434,13 @@ export default function OccupancyDashboardPage() {
         const ktx1 = ktx1Result.count;
         const ktx2 = ktx2Result.count;
 
+        // Compute KTX room counts for capacity calculation
+        const ktx1RoomSet = new Set<string>();
+        const ktx2RoomSet = new Set<string>();
+        allWorkersData.forEach((row: { ktx: string; gioi_tinh: string; don_vi: string }) => {
+          // We need phong_so for capacity — skip here, use workers context instead
+        });
+
         // Sort by count descending, take top entries — restore display names
         const sortedDonVi: [string, number][] = Object.entries(donViMap)
           .sort((a, b) => b[1] - a[1])
@@ -441,6 +489,15 @@ export default function OccupancyDashboardPage() {
 
   const workersWithRoom = useMemo(() => workers.filter(w => w.day && w.phongSo), [workers]);
   const fillRateAll = totalCapacityAll > 0 ? Math.round((workersWithRoom.length / totalCapacityAll) * 100) : 0;
+
+  // Vacant beds per KTX
+  const ktx1RoomCount = useMemo(() => new Set(workers.filter(w => w.ktx === 'KTX 1' && w.day && w.phongSo).map(w => `${w.day}||${w.phongSo}`)).size, [workers]);
+  const ktx2RoomCount = useMemo(() => new Set(workers.filter(w => w.ktx === 'KTX 2' && w.day && w.phongSo).map(w => `${w.day}||${w.phongSo}`)).size, [workers]);
+  const ktx1Capacity = ktx1RoomCount * ROOM_CAPACITY;
+  const ktx2Capacity = ktx2RoomCount * ROOM_CAPACITY;
+  const ktx1Vacant = Math.max(0, ktx1Capacity - ktxStats.ktx1);
+  const ktx2Vacant = Math.max(0, ktx2Capacity - ktxStats.ktx2);
+  const totalVacant = Math.max(0, totalCapacityAll - workersWithRoom.length);
 
   // Per-KTX metrics (when a specific KTX is selected)
   const filteredRoomsSet = useMemo(() => {
@@ -566,6 +623,9 @@ export default function OccupancyDashboardPage() {
   const kpiCapacity = selectedKTX === 'all' ? totalCapacityAll : filteredCapacity;
   const kpiFillRate = selectedKTX === 'all' ? fillRateAll : filteredFillRate;
   const kpiWithRoom = selectedKTX === 'all' ? workersWithRoom.length : filteredWithRoom;
+  const kpiVacant = selectedKTX === 'all'
+    ? totalVacant
+    : Math.max(0, filteredCapacity - filteredWithRoom);
 
   return (
     <AppLayout>
@@ -667,6 +727,26 @@ export default function OccupancyDashboardPage() {
             sub={`${kpiWithRoom}/${kpiCapacity} chỗ đã dùng`}
             icon={Percent}
             color="bg-emerald-500"
+            extraRows={
+              <div className="mt-2 space-y-1">
+                <div className="flex items-center justify-between rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1">
+                  <span className="text-xs text-emerald-700 font-medium">Chỗ trống (toàn KTX)</span>
+                  <span className="text-sm font-bold text-emerald-700 font-tabular">{kpiVacant}</span>
+                </div>
+                {selectedKTX === 'all' && (
+                  <>
+                    <div className="flex items-center justify-between rounded bg-blue-50 px-2 py-1">
+                      <span className="text-xs text-blue-600 font-medium">KTX 1 trống</span>
+                      <span className="text-xs font-bold text-blue-700 font-tabular">{ktx1Vacant}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded bg-orange-50 px-2 py-1">
+                      <span className="text-xs text-orange-600 font-medium">KTX 2 trống</span>
+                      <span className="text-xs font-bold text-orange-700 font-tabular">{ktx2Vacant}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            }
           />
           <KPICard
             label="Thiếu Dữ Liệu"
@@ -905,6 +985,8 @@ export default function OccupancyDashboardPage() {
                               {rooms.map(room => {
                                 // roomWorkers: scoped to ktx + building + room — same list for tooltip and modal
                                 const roomWorkers = buildingWorkers.filter(w => w.phongSo === room);
+                                const roomKey = `${ktx}||${building}||${room}`;
+                                const unitName = roomUnitMap[roomKey];
                                 return (
                                   <HeatmapRoomCell
                                     key={`${ktx}-${building}-${room}`}
@@ -915,6 +997,7 @@ export default function OccupancyDashboardPage() {
                                     building={building}
                                     workers={roomWorkers.map(w => ({ hoVaTen: w.hoVaTen, maNV: w.maNV }))}
                                     onClickRoom={handleRoomClick}
+                                    unitName={unitName}
                                   />
                                 );
                               })}
