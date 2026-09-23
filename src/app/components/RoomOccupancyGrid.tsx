@@ -258,7 +258,7 @@ export default function RoomOccupancyGrid() {
                     const barColor = getRoomBarColor(pct);
                     const unitLabel = getRoomUnitLabel(group.ktx, group.building, room);
                     const isAdminAssigned = roomUnitAssignments.some(
-                      a => a.ktx === group.ktx && a.day === group.building && a.phong_so === room
+                      a => a.ktx === group.ktx && a.day_nha === group.building && a.phong_so === room
                     );
                     return (
                       <div
