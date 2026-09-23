@@ -53,15 +53,19 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       const trimmed = unitInput.trim();
 
       if (trimmed === '') {
-        // Primary: upsert null into room_unit_assignments (delete the row)
-        await supabase
+        // Delete from room_unit_assignments
+        const { error: deleteError } = await supabase
           .from('room_unit_assignments')
           .delete()
           .eq('ktx', ktx)
           .eq('day', buildingRaw)
           .eq('phong_so', room);
 
-        // Also clear unit on facilities row if phong_khu_vuc matches
+        if (deleteError) {
+          throw new Error(`Lỗi xóa đơn vị: ${deleteError.message || JSON.stringify(deleteError)}`);
+        }
+
+        // Also clear unit on facilities row
         await supabase
           .from('facilities')
           .update({ unit: null })
@@ -72,43 +76,43 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
         setLocalUnit(null);
         onUnitUpdated?.(null);
       } else {
-        // Primary: upsert into room_unit_assignments using ktx+day+phong_so key
-        const { error: upsertError } = await supabase
+        // Step 1: Check if row already exists
+        const { data: existing, error: selectError } = await supabase
           .from('room_unit_assignments')
-          .upsert(
-            { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed },
-            { onConflict: 'ktx,day,phong_so' }
-          );
+          .select('id')
+          .eq('ktx', ktx)
+          .eq('day', buildingRaw)
+          .eq('phong_so', room)
+          .maybeSingle();
 
-        if (upsertError) {
-          // Fallback: check-then-update/insert
-          const { data: existing, error: selectError } = await supabase
+        if (selectError) {
+          throw new Error(`Lỗi kiểm tra dữ liệu: ${selectError.message || JSON.stringify(selectError)}`);
+        }
+
+        if (existing) {
+          // Step 2a: Row exists → UPDATE
+          const { error: updateError } = await supabase
             .from('room_unit_assignments')
-            .select('id')
+            .update({ don_vi: trimmed, updated_at: new Date().toISOString() })
             .eq('ktx', ktx)
             .eq('day', buildingRaw)
-            .eq('phong_so', room)
-            .maybeSingle();
+            .eq('phong_so', room);
 
-          if (selectError) throw new Error(selectError.message || JSON.stringify(selectError));
+          if (updateError) {
+            throw new Error(`Lỗi cập nhật đơn vị: ${updateError.message || JSON.stringify(updateError)}`);
+          }
+        } else {
+          // Step 2b: Row does not exist → INSERT
+          const { error: insertError } = await supabase
+            .from('room_unit_assignments')
+            .insert({ ktx, day: buildingRaw, phong_so: room, don_vi: trimmed });
 
-          if (existing) {
-            const { error: updateError } = await supabase
-              .from('room_unit_assignments')
-              .update({ don_vi: trimmed })
-              .eq('ktx', ktx)
-              .eq('day', buildingRaw)
-              .eq('phong_so', room);
-            if (updateError) throw new Error(updateError.message || JSON.stringify(updateError));
-          } else {
-            const { error: insertError } = await supabase
-              .from('room_unit_assignments')
-              .insert({ ktx, day: buildingRaw, phong_so: room, don_vi: trimmed });
-            if (insertError) throw new Error(insertError.message || JSON.stringify(insertError));
+          if (insertError) {
+            throw new Error(`Lỗi thêm đơn vị: ${insertError.message || JSON.stringify(insertError)}`);
           }
         }
 
-        // Also update facilities.unit if a matching row exists (phong_khu_vuc = room)
+        // Also update facilities.unit as secondary store
         await supabase
           .from('facilities')
           .update({ unit: trimmed })
@@ -124,7 +128,8 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : 'Lỗi lưu đơn vị');
+      const msg = err instanceof Error ? err.message : String(err);
+      setSaveError(msg || 'Lỗi lưu đơn vị — vui lòng thử lại');
     } finally {
       setSaving(false);
     }
