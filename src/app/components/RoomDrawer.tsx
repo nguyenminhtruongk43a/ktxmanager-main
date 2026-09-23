@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState, useCallback } from 'react';
 import { Worker, calcSoNgay, getProfileStatus } from '@/data/workers';
-import { X, Users, Phone, CreditCard, MapPin, Calendar, Tag } from 'lucide-react';
+import { X, Users, Phone, CreditCard, MapPin, Calendar, FileText } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/context/AuthContext';
 
@@ -12,11 +12,9 @@ interface Props {
   room: string;
   workers: Worker[];
   adminAssignedUnit?: string;
-  roomLabel?: string | null;
   roomNote?: string | null;
   onClose: () => void;
   onUnitUpdated?: (newUnit: string | null) => void;
-  onRoomLabelUpdated?: (newLabel: string | null) => void;
   onRoomNoteUpdated?: (newNote: string | null) => void;
 }
 
@@ -27,26 +25,14 @@ function StatusDot({ worker }: { worker: Worker }) {
   return <span className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" title="Chưa phân phòng" />;
 }
 
-export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, roomLabel, roomNote, onClose, onUnitUpdated, onRoomLabelUpdated, onRoomNoteUpdated }: Props) {
+export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, roomNote, onClose, onUnitUpdated, onRoomNoteUpdated }: Props) {
   const { isAdmin } = useAuth();
-
-  // --- Room Label state ---
-  const [labelInput, setLabelInput] = useState(roomLabel ?? '');
-  const [localLabel, setLocalLabel] = useState<string | null>(roomLabel ?? null);
-  const [savingLabel, setSavingLabel] = useState(false);
-  const [labelError, setLabelError] = useState<string | null>(null);
-  const [labelSuccess, setLabelSuccess] = useState(false);
 
   // --- Room Note state ---
   const [noteInput, setNoteInput] = useState(roomNote ?? '');
   const [savingNote, setSavingNote] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteSuccess, setNoteSuccess] = useState(false);
-
-  useEffect(() => {
-    setLabelInput(roomLabel ?? '');
-    setLocalLabel(roomLabel ?? null);
-  }, [roomLabel]);
 
   useEffect(() => {
     setNoteInput(roomNote ?? '');
@@ -71,80 +57,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     return building || '';
   }, [buildingRaw, building]);
 
-  /** Save room_label directly to room_units table */
-  const handleSaveRoomLabel = useCallback(async () => {
-    setSavingLabel(true);
-    setLabelError(null);
-    setLabelSuccess(false);
-    try {
-      const supabase = createClient();
-      const trimmed = labelInput.trim();
-      const effectiveDayNha = resolveEffectiveDayNha();
-
-      console.log('[RoomDrawer] Lưu tên phòng:', { ktx, day_nha: effectiveDayNha, phong_so: room, room_label: trimmed || null });
-
-      // Step 1: Try UPDATE first (row must already exist)
-      const { data: updateData, error: updateError } = await supabase
-        .from('room_units')
-        .update({ room_label: trimmed || null, updated_at: new Date().toISOString() })
-        .eq('ktx', ktx)
-        .eq('day_nha', effectiveDayNha)
-        .eq('phong_so', room)
-        .select();
-
-      if (updateError) {
-        throw new Error(`Lỗi cập nhật tên phòng: ${updateError.message}`);
-      }
-
-      // Step 2: If no row was updated, insert a new row
-      if (!updateData || updateData.length === 0) {
-        const { error: insertError } = await supabase
-          .from('room_units')
-          .insert({
-            ktx,
-            day_nha: effectiveDayNha,
-            phong_so: room,
-            unit: adminAssignedUnit ?? '',
-            room_label: trimmed || null,
-          });
-
-        if (insertError) {
-          // Fallback: try upsert if insert fails (race condition)
-          const { error: upsertError } = await supabase
-            .from('room_units')
-            .upsert(
-              {
-                ktx,
-                day_nha: effectiveDayNha,
-                phong_so: room,
-                unit: adminAssignedUnit ?? '',
-                room_label: trimmed || null,
-              },
-              { onConflict: 'ktx,day_nha,phong_so' }
-            );
-          if (upsertError) {
-            throw new Error(`Lỗi lưu tên phòng: ${upsertError.message}`);
-          }
-        }
-      }
-
-      console.log('[RoomDrawer] ✅ Đã lưu tên phòng thành công!', { ktx, day_nha: effectiveDayNha, phong_so: room, room_label: trimmed || null });
-
-      const newLabel = trimmed || null;
-      setLocalLabel(newLabel);
-      onRoomLabelUpdated?.(newLabel);
-      setLabelSuccess(true);
-      setTimeout(() => setLabelSuccess(false), 2500);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[RoomDrawer] ❌ Lỗi lưu tên phòng:', msg);
-      setLabelError(msg || 'Lỗi lưu tên phòng — vui lòng thử lại');
-    } finally {
-      setSavingLabel(false);
-    }
-  }, [ktx, room, labelInput, adminAssignedUnit, resolveEffectiveDayNha, onRoomLabelUpdated]);
-
-  /** Save room_note directly to room_units table */
+  /** Save room_note to room_units table */
   const handleSaveRoomNote = useCallback(async () => {
     setSavingNote(true);
     setNoteError(null);
@@ -182,6 +95,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
           });
 
         if (insertError) {
+          // Fallback: upsert if insert fails (race condition)
           const { error: upsertError } = await supabase
             .from('room_units')
             .upsert(
@@ -224,10 +138,10 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
         <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-primary/5">
           <div>
             <h2 className="text-base font-bold text-foreground">
-              {localLabel ? localLabel : `${building} — Phòng ${room}`}
+              {building} — Phòng {room}
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {building} — Phòng {room} · {workers.length} công nhân
+              {workers.length} công nhân
             </p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
@@ -235,50 +149,17 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
           </button>
         </div>
 
-        {/* Room Label section */}
-        {isAdmin && (
-          <div className="px-5 py-3 border-b border-border bg-violet-50/50">
-            <div className="flex items-center gap-2 mb-2">
-              <Tag size={13} className="text-violet-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-violet-700">Tên/Nhãn phòng tùy chỉnh</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={labelInput}
-                onChange={e => setLabelInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleSaveRoomLabel(); }}
-                placeholder={`Ví dụ: Phòng Đại đội 5...`}
-                className="flex-1 min-w-0 text-xs border border-violet-300 rounded px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 disabled:opacity-50"
-                disabled={savingLabel}
-              />
-              <button
-                onClick={handleSaveRoomLabel}
-                disabled={savingLabel}
-                className="flex-shrink-0 px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold transition-colors disabled:opacity-50"
-              >
-                {savingLabel ? 'Đang lưu...' : 'Lưu tên phòng'}
-              </button>
-            </div>
-            {labelError && <p className="text-xs text-red-500 mt-1">{labelError}</p>}
-            {labelSuccess && <p className="text-xs text-green-600 mt-1">✓ Đã lưu tên phòng thành công!</p>}
-            {localLabel && (
-              <p className="text-[10px] text-violet-600 mt-1">Tên hiện tại: <span className="font-semibold">{localLabel}</span></p>
-            )}
-          </div>
-        )}
-
         {/* Room Note section */}
         {isAdmin && (
           <div className="px-5 py-3 border-b border-border bg-amber-50/50">
             <div className="flex items-center gap-2 mb-2">
-              <Tag size={13} className="text-amber-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-amber-700">Ghi chú / Nhãn tự do</span>
+              <FileText size={13} className="text-amber-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-amber-700">Ghi chú phòng</span>
             </div>
             <textarea
               value={noteInput}
               onChange={e => setNoteInput(e.target.value)}
-              placeholder="Ghi chú tự do: loại đơn vị, chú thích đặc biệt..."
+              placeholder="Điền thông tin tự do: loại đơn vị, chú thích đặc biệt, tên phòng..."
               rows={3}
               className="w-full text-xs border border-amber-300 rounded px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50 resize-none"
               disabled={savingNote}
