@@ -57,18 +57,46 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
           .eq('ktx', ktx)
           .eq('day', buildingRaw)
           .eq('phong_so', room);
-        if (error) throw error;
+        if (error) throw new Error(error.message || JSON.stringify(error));
         setLocalUnit(null);
         onUnitUpdated?.(null);
       } else {
-        // Upsert assignment
-        const { error } = await supabase
+        // Try upsert first
+        const { error: upsertError } = await supabase
           .from('room_unit_assignments')
           .upsert(
-            { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed, updated_at: new Date().toISOString() },
+            { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed },
             { onConflict: 'ktx,day,phong_so' }
           );
-        if (error) throw error;
+
+        if (upsertError) {
+          // Fallback: check if row exists, then update or insert
+          const { data: existing, error: selectError } = await supabase
+            .from('room_unit_assignments')
+            .select('id')
+            .eq('ktx', ktx)
+            .eq('day', buildingRaw)
+            .eq('phong_so', room)
+            .maybeSingle();
+
+          if (selectError) throw new Error(selectError.message || JSON.stringify(selectError));
+
+          if (existing) {
+            const { error: updateError } = await supabase
+              .from('room_unit_assignments')
+              .update({ don_vi: trimmed })
+              .eq('ktx', ktx)
+              .eq('day', buildingRaw)
+              .eq('phong_so', room);
+            if (updateError) throw new Error(updateError.message || JSON.stringify(updateError));
+          } else {
+            const { error: insertError } = await supabase
+              .from('room_unit_assignments')
+              .insert({ ktx, day: buildingRaw, phong_so: room, don_vi: trimmed });
+            if (insertError) throw new Error(insertError.message || JSON.stringify(insertError));
+          }
+        }
+
         setLocalUnit(trimmed);
         onUnitUpdated?.(trimmed);
       }
