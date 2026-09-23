@@ -44,6 +44,32 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  /**
+   * Resolve the effective day_nha value to write to Supabase.
+   * Priority:
+   *  1. buildingRaw prop (direct raw value)
+   *  2. Extract from building prop by stripping KTX prefix (e.g. "KTX 1 · Dãy 5" → "Dãy 5")
+   *  3. Extract from drawer title string (e.g. "Dãy 5 — Phòng 12" → "Dãy 5")
+   *  4. Use building prop as-is
+   */
+  const resolveEffectiveDayNha = useCallback((): string => {
+    if (buildingRaw && buildingRaw.trim()) return buildingRaw.trim();
+
+    // Try stripping KTX prefix from building prop: "KTX 1 · Dãy 5" → "Dãy 5"
+    if (building && building.trim()) {
+      const afterDot = building.match(/·\s*(.+)$/);
+      if (afterDot) return afterDot[1].trim();
+      // If no dot separator, use building as-is
+      return building.trim();
+    }
+
+    // Fallback: extract from title pattern "Dãy X — Phòng Y"
+    const titleMatch = building.match(/^(Dãy\s*\S+)/i);
+    if (titleMatch) return titleMatch[1].trim();
+
+    return building || '';
+  }, [buildingRaw, building]);
+
   const handleSaveUnit = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
@@ -51,11 +77,9 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     try {
       const supabase = createClient();
       const trimmed = unitInput.trim();
+      const effectiveDayNha = resolveEffectiveDayNha();
 
-      // Guard: ensure buildingRaw is not null/empty before writing to DB
-      if (!buildingRaw) {
-        throw new Error('Không xác định được dãy nhà (buildingRaw rỗng). Vui lòng đóng và mở lại phòng.');
-      }
+      console.log('[RoomDrawer] handleSaveUnit →', { ktx, day_nha: effectiveDayNha, phong_so: room, unit: trimmed });
 
       if (trimmed === '') {
         // Delete from room_units
@@ -63,7 +87,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
           .from('room_units')
           .delete()
           .eq('ktx', ktx)
-          .eq('day_nha', buildingRaw)
+          .eq('day_nha', effectiveDayNha)
           .eq('phong_so', room);
 
         if (deleteError) {
@@ -78,7 +102,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
         const { error: upsertError } = await supabase
           .from('room_units')
           .upsert(
-            { ktx, day_nha: buildingRaw, phong_so: room, unit: trimmed, updated_at: new Date().toISOString() },
+            { ktx, day_nha: effectiveDayNha, phong_so: room, unit: trimmed, updated_at: new Date().toISOString() },
             { onConflict: 'ktx,day_nha,phong_so' }
           );
 
@@ -101,18 +125,22 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     } finally {
       setSaving(false);
     }
-  }, [ktx, buildingRaw, room, unitInput, onUnitUpdated]);
+  }, [ktx, resolveEffectiveDayNha, room, unitInput, onUnitUpdated]);
 
   const handleRemoveUnit = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
     try {
       const supabase = createClient();
+      const effectiveDayNha = resolveEffectiveDayNha();
+
+      console.log('[RoomDrawer] handleRemoveUnit →', { ktx, day_nha: effectiveDayNha, phong_so: room });
+
       const { error } = await supabase
         .from('room_units')
         .delete()
         .eq('ktx', ktx)
-        .eq('day_nha', buildingRaw)
+        .eq('day_nha', effectiveDayNha)
         .eq('phong_so', room);
 
       if (error) {
@@ -131,7 +159,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     } finally {
       setSaving(false);
     }
-  }, [ktx, buildingRaw, room, onUnitUpdated]);
+  }, [ktx, resolveEffectiveDayNha, room, onUnitUpdated]);
 
   return (
     <>
