@@ -13,9 +13,11 @@ interface Props {
   workers: Worker[];
   adminAssignedUnit?: string;
   roomLabel?: string | null;
+  roomNote?: string | null;
   onClose: () => void;
   onUnitUpdated?: (newUnit: string | null) => void;
   onRoomLabelUpdated?: (newLabel: string | null) => void;
+  onRoomNoteUpdated?: (newNote: string | null) => void;
 }
 
 function StatusDot({ worker }: { worker: Worker }) {
@@ -25,7 +27,7 @@ function StatusDot({ worker }: { worker: Worker }) {
   return <span className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" title="Chưa phân phòng" />;
 }
 
-export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, roomLabel, onClose, onUnitUpdated, onRoomLabelUpdated }: Props) {
+export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, adminAssignedUnit, roomLabel, roomNote, onClose, onUnitUpdated, onRoomLabelUpdated, onRoomNoteUpdated }: Props) {
   const { isAdmin } = useAuth();
 
   // --- Room Label state ---
@@ -35,10 +37,20 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
   const [labelError, setLabelError] = useState<string | null>(null);
   const [labelSuccess, setLabelSuccess] = useState(false);
 
+  // --- Room Note state ---
+  const [noteInput, setNoteInput] = useState(roomNote ?? '');
+  const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteSuccess, setNoteSuccess] = useState(false);
+
   useEffect(() => {
     setLabelInput(roomLabel ?? '');
     setLocalLabel(roomLabel ?? null);
   }, [roomLabel]);
+
+  useEffect(() => {
+    setNoteInput(roomNote ?? '');
+  }, [roomNote]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -132,6 +144,76 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     }
   }, [ktx, room, labelInput, adminAssignedUnit, resolveEffectiveDayNha, onRoomLabelUpdated]);
 
+  /** Save room_note directly to room_units table */
+  const handleSaveRoomNote = useCallback(async () => {
+    setSavingNote(true);
+    setNoteError(null);
+    setNoteSuccess(false);
+    try {
+      const supabase = createClient();
+      const trimmed = noteInput.trim();
+      const effectiveDayNha = resolveEffectiveDayNha();
+
+      console.log('[RoomDrawer] Lưu ghi chú phòng:', { ktx, day_nha: effectiveDayNha, phong_so: room, room_note: trimmed || null });
+
+      // Step 1: Try UPDATE first (row must already exist)
+      const { data: updateData, error: updateError } = await supabase
+        .from('room_units')
+        .update({ room_note: trimmed || null, updated_at: new Date().toISOString() })
+        .eq('ktx', ktx)
+        .eq('day_nha', effectiveDayNha)
+        .eq('phong_so', room)
+        .select();
+
+      if (updateError) {
+        throw new Error(`Lỗi cập nhật ghi chú: ${updateError.message}`);
+      }
+
+      // Step 2: If no row was updated, insert a new row
+      if (!updateData || updateData.length === 0) {
+        const { error: insertError } = await supabase
+          .from('room_units')
+          .insert({
+            ktx,
+            day_nha: effectiveDayNha,
+            phong_so: room,
+            unit: adminAssignedUnit ?? '',
+            room_note: trimmed || null,
+          });
+
+        if (insertError) {
+          const { error: upsertError } = await supabase
+            .from('room_units')
+            .upsert(
+              {
+                ktx,
+                day_nha: effectiveDayNha,
+                phong_so: room,
+                unit: adminAssignedUnit ?? '',
+                room_note: trimmed || null,
+              },
+              { onConflict: 'ktx,day_nha,phong_so' }
+            );
+          if (upsertError) {
+            throw new Error(`Lỗi lưu ghi chú: ${upsertError.message}`);
+          }
+        }
+      }
+
+      console.log('[RoomDrawer] ✅ Đã lưu ghi chú thành công!', { ktx, day_nha: effectiveDayNha, phong_so: room, room_note: trimmed || null });
+
+      onRoomNoteUpdated?.(trimmed || null);
+      setNoteSuccess(true);
+      setTimeout(() => setNoteSuccess(false), 2500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[RoomDrawer] ❌ Lỗi lưu ghi chú:', msg);
+      setNoteError(msg || 'Lỗi lưu ghi chú — vui lòng thử lại');
+    } finally {
+      setSavingNote(false);
+    }
+  }, [ktx, room, noteInput, adminAssignedUnit, resolveEffectiveDayNha, onRoomNoteUpdated]);
+
   return (
     <>
       {/* Backdrop */}
@@ -183,6 +265,37 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
             {localLabel && (
               <p className="text-[10px] text-violet-600 mt-1">Tên hiện tại: <span className="font-semibold">{localLabel}</span></p>
             )}
+          </div>
+        )}
+
+        {/* Room Note section */}
+        {isAdmin && (
+          <div className="px-5 py-3 border-b border-border bg-amber-50/50">
+            <div className="flex items-center gap-2 mb-2">
+              <Tag size={13} className="text-amber-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-amber-700">Ghi chú / Nhãn tự do</span>
+            </div>
+            <textarea
+              value={noteInput}
+              onChange={e => setNoteInput(e.target.value)}
+              placeholder="Ghi chú tự do: loại đơn vị, chú thích đặc biệt..."
+              rows={3}
+              className="w-full text-xs border border-amber-300 rounded px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50 resize-none"
+              disabled={savingNote}
+            />
+            <div className="flex items-center justify-between mt-1.5">
+              <div>
+                {noteError && <p className="text-xs text-red-500">{noteError}</p>}
+                {noteSuccess && <p className="text-xs text-green-600">✓ Đã lưu ghi chú thành công!</p>}
+              </div>
+              <button
+                onClick={handleSaveRoomNote}
+                disabled={savingNote}
+                className="flex-shrink-0 px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                {savingNote ? 'Đang lưu...' : 'Lưu ghi chú'}
+              </button>
+            </div>
           </div>
         )}
 
