@@ -152,6 +152,23 @@ export default function RoomOccupancyGrid() {
     return a?.don_vi;
   }, [drawerRoom, roomUnitAssignments]);
 
+  // Optimistically update roomUnitAssignments after admin saves a unit
+  const handleUnitUpdated = useCallback((newUnit: string | null) => {
+    if (!drawerRoom) return;
+    const { ktx, building: day, room: phong_so } = drawerRoom;
+    setRoomUnitAssignments(prev => {
+      const filtered = prev.filter(
+        a => !(a.ktx === ktx && a.day === day && a.phong_so === phong_so)
+      );
+      if (newUnit) {
+        return [...filtered, { ktx, day, phong_so, don_vi: newUnit }];
+      }
+      return filtered;
+    });
+    // Background re-fetch to stay in sync with DB
+    fetchRoomUnitAssignments();
+  }, [drawerRoom, fetchRoomUnitAssignments]);
+
   return (
     <>
       <div className="card p-5">
@@ -302,7 +319,7 @@ export default function RoomOccupancyGrid() {
           workers={drawerWorkers}
           adminAssignedUnit={drawerAdminUnit}
           onClose={() => setDrawerRoom(null)}
-          onUnitUpdated={fetchRoomUnitAssignments}
+          onUnitUpdated={handleUnitUpdated}
         />
       )}
     </>

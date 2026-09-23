@@ -13,7 +13,7 @@ interface Props {
   workers: Worker[];
   adminAssignedUnit?: string;
   onClose: () => void;
-  onUnitUpdated?: () => void;
+  onUnitUpdated?: (newUnit: string | null) => void;
 }
 
 function StatusDot({ worker }: { worker: Worker }) {
@@ -27,11 +27,14 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
   const { isAdmin } = useAuth();
   const [isEditingUnit, setIsEditingUnit] = useState(false);
   const [unitInput, setUnitInput] = useState(adminAssignedUnit ?? '');
+  // Local display value — updated optimistically after save
+  const [localUnit, setLocalUnit] = useState<string | null>(adminAssignedUnit ?? null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setUnitInput(adminAssignedUnit ?? '');
+    setLocalUnit(adminAssignedUnit ?? null);
   }, [adminAssignedUnit]);
 
   useEffect(() => {
@@ -48,12 +51,15 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       const trimmed = unitInput.trim();
       if (trimmed === '') {
         // Delete assignment if empty
-        await supabase
+        const { error } = await supabase
           .from('room_unit_assignments')
           .delete()
           .eq('ktx', ktx)
           .eq('day', buildingRaw)
           .eq('phong_so', room);
+        if (error) throw error;
+        setLocalUnit(null);
+        onUnitUpdated?.(null);
       } else {
         // Upsert assignment
         const { error } = await supabase
@@ -63,9 +69,10 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
             { onConflict: 'ktx,day,phong_so' }
           );
         if (error) throw error;
+        setLocalUnit(trimmed);
+        onUnitUpdated?.(trimmed);
       }
       setIsEditingUnit(false);
-      onUnitUpdated?.();
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Lỗi lưu đơn vị');
     } finally {
@@ -78,15 +85,17 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     setSaveError(null);
     try {
       const supabase = createClient();
-      await supabase
+      const { error } = await supabase
         .from('room_unit_assignments')
         .delete()
         .eq('ktx', ktx)
         .eq('day', buildingRaw)
         .eq('phong_so', room);
+      if (error) throw error;
       setUnitInput('');
+      setLocalUnit(null);
       setIsEditingUnit(false);
-      onUnitUpdated?.();
+      onUnitUpdated?.(null);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Lỗi xóa đơn vị');
     } finally {
@@ -129,8 +138,8 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
                   disabled={saving}
                 />
               ) : (
-                <span className={`text-xs truncate ${adminAssignedUnit ? 'font-semibold text-indigo-700' : 'text-muted-foreground italic'}`}>
-                  {adminAssignedUnit || 'Chưa gán đơn vị cố định'}
+                <span className={`text-xs truncate ${localUnit ? 'font-semibold text-indigo-700' : 'text-muted-foreground italic'}`}>
+                  {localUnit || 'Chưa gán đơn vị cố định'}
                 </span>
               )}
             </div>
@@ -146,7 +155,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
                     >
                       <Check size={14} />
                     </button>
-                    {adminAssignedUnit && (
+                    {localUnit && (
                       <button
                         onClick={handleRemoveUnit}
                         disabled={saving}
@@ -157,7 +166,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
                       </button>
                     )}
                     <button
-                      onClick={() => { setIsEditingUnit(false); setUnitInput(adminAssignedUnit ?? ''); setSaveError(null); }}
+                      onClick={() => { setIsEditingUnit(false); setUnitInput(localUnit ?? ''); setSaveError(null); }}
                       className="p-1.5 rounded hover:bg-muted text-muted-foreground transition-colors"
                       title="Hủy"
                     >
@@ -179,7 +188,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
           {saveError && <p className="text-xs text-red-500 mt-1">{saveError}</p>}
           {isAdmin && !isEditingUnit && (
             <p className="text-[10px] text-muted-foreground mt-1">
-              {adminAssignedUnit
+              {localUnit
                 ? 'Đơn vị do Admin gán cố định. Nhấn bút chì để chỉnh sửa.'
                 : 'Nhấn bút chì để gán đơn vị cố định cho phòng này.'}
             </p>
