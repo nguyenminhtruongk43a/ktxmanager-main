@@ -69,23 +69,54 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       const trimmed = labelInput.trim();
       const effectiveDayNha = resolveEffectiveDayNha();
 
-      const { error } = await supabase
+      console.log('[RoomDrawer] Lưu tên phòng:', { ktx, day_nha: effectiveDayNha, phong_so: room, room_label: trimmed || null });
+
+      // Step 1: Try UPDATE first (row must already exist)
+      const { data: updateData, error: updateError } = await supabase
         .from('room_units')
-        .upsert(
-          {
+        .update({ room_label: trimmed || null, updated_at: new Date().toISOString() })
+        .eq('ktx', ktx)
+        .eq('day_nha', effectiveDayNha)
+        .eq('phong_so', room)
+        .select();
+
+      if (updateError) {
+        throw new Error(`Lỗi cập nhật tên phòng: ${updateError.message}`);
+      }
+
+      // Step 2: If no row was updated, insert a new row
+      if (!updateData || updateData.length === 0) {
+        const { error: insertError } = await supabase
+          .from('room_units')
+          .insert({
             ktx,
             day_nha: effectiveDayNha,
             phong_so: room,
             unit: adminAssignedUnit ?? '',
             room_label: trimmed || null,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'ktx,day_nha,phong_so' }
-        );
+          });
 
-      if (error) {
-        throw new Error(`Lỗi lưu tên phòng: ${error.message}`);
+        if (insertError) {
+          // Fallback: try upsert if insert fails (race condition)
+          const { error: upsertError } = await supabase
+            .from('room_units')
+            .upsert(
+              {
+                ktx,
+                day_nha: effectiveDayNha,
+                phong_so: room,
+                unit: adminAssignedUnit ?? '',
+                room_label: trimmed || null,
+              },
+              { onConflict: 'ktx,day_nha,phong_so' }
+            );
+          if (upsertError) {
+            throw new Error(`Lỗi lưu tên phòng: ${upsertError.message}`);
+          }
+        }
       }
+
+      console.log('[RoomDrawer] ✅ Đã lưu tên phòng thành công!', { ktx, day_nha: effectiveDayNha, phong_so: room, room_label: trimmed || null });
 
       const newLabel = trimmed || null;
       setLocalLabel(newLabel);
@@ -94,6 +125,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       setTimeout(() => setLabelSuccess(false), 2500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error('[RoomDrawer] ❌ Lỗi lưu tên phòng:', msg);
       setLabelError(msg || 'Lỗi lưu tên phòng — vui lòng thử lại');
     } finally {
       setSavingLabel(false);
