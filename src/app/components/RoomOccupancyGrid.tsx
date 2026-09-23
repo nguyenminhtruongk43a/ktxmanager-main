@@ -264,7 +264,10 @@ export default function RoomOccupancyGrid() {
                       <div
                         key={`room-${group.key}-${room}`}
                         className={`border rounded-lg p-3 cursor-pointer hover:shadow-md transition-all hover:scale-105 ${roomClass}`}
-                        onClick={() => setDrawerRoom({ ktx: group.ktx, building: group.building, room })}
+                        onClick={() => {
+                          if (!group.building) return; // guard: skip if building is empty
+                          setDrawerRoom({ ktx: group.ktx, building: group.building, room });
+                        }}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-bold text-foreground">Phòng {room}</span>

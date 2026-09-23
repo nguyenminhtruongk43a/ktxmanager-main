@@ -52,6 +52,11 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
       const supabase = createClient();
       const trimmed = unitInput.trim();
 
+      // Guard: ensure buildingRaw is not null/empty before writing to DB
+      if (!buildingRaw) {
+        throw new Error('Không xác định được dãy nhà (buildingRaw rỗng). Vui lòng đóng và mở lại phòng.');
+      }
+
       if (trimmed === '') {
         // Delete from room_units
         const { error: deleteError } = await supabase
