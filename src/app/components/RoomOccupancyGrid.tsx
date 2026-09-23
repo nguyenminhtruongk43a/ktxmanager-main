@@ -48,35 +48,37 @@ export default function RoomOccupancyGrid() {
   const fetchRoomUnitAssignments = useCallback(async () => {
     const supabase = createClient();
 
-    // Primary: read unit column from facilities table
+    // Primary: read from room_unit_assignments (uses phong_so matching worker data)
+    const { data: assignmentsData } = await supabase
+      .from('room_unit_assignments')
+      .select('ktx, day, phong_so, don_vi');
+
+    // Secondary: read unit column from facilities table (phong_khu_vuc may differ from phong_so)
     const { data: facilitiesData } = await supabase
       .from('facilities')
       .select('ktx, day, phong_khu_vuc, unit')
       .not('unit', 'is', null);
 
-    // Secondary: read from room_unit_assignments (legacy / fallback)
-    const { data: assignmentsData } = await supabase
-      .from('room_unit_assignments')
-      .select('ktx, day, phong_so, don_vi');
-
     const merged: RoomUnitAssignment[] = [];
 
-    // Add facilities-based assignments first (higher priority)
-    if (facilitiesData) {
-      facilitiesData.forEach((f: { ktx: string; day: string; phong_khu_vuc: string; unit: string }) => {
-        if (f.unit) {
-          merged.push({ ktx: f.ktx, day: f.day, phong_so: f.phong_khu_vuc, don_vi: f.unit });
-        }
+    // Add room_unit_assignments first (higher priority — matches worker phong_so exactly)
+    if (assignmentsData) {
+      (assignmentsData as RoomUnitAssignment[]).forEach(a => {
+        if (a.don_vi) merged.push(a);
       });
     }
 
-    // Add room_unit_assignments only if not already covered by facilities
-    if (assignmentsData) {
-      (assignmentsData as RoomUnitAssignment[]).forEach(a => {
-        const alreadyExists = merged.some(
-          m => m.ktx === a.ktx && m.day === a.day && m.phong_so === a.phong_so
-        );
-        if (!alreadyExists) merged.push(a);
+    // Add facilities-based assignments only if not already covered
+    if (facilitiesData) {
+      facilitiesData.forEach((f: { ktx: string; day: string; phong_khu_vuc: string; unit: string }) => {
+        if (f.unit) {
+          const alreadyExists = merged.some(
+            m => m.ktx === f.ktx && m.day === f.day && m.phong_so === f.phong_khu_vuc
+          );
+          if (!alreadyExists) {
+            merged.push({ ktx: f.ktx, day: f.day, phong_so: f.phong_khu_vuc, don_vi: f.unit });
+          }
+        }
       });
     }
 
