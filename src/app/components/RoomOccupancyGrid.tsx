@@ -32,9 +32,9 @@ interface BuildingGroup {
 /** Admin-assigned unit label per room */
 interface RoomUnitAssignment {
   ktx: string;
-  day: string;
+  day_nha: string;
   phong_so: string;
-  don_vi: string;
+  unit: string;
 }
 
 export default function RoomOccupancyGrid() {
@@ -48,41 +48,18 @@ export default function RoomOccupancyGrid() {
   const fetchRoomUnitAssignments = useCallback(async () => {
     const supabase = createClient();
 
-    // Primary: read from room_unit_assignments (uses phong_so matching worker data)
-    const { data: assignmentsData } = await supabase
-      .from('room_unit_assignments')
-      .select('ktx, day, phong_so, don_vi');
+    const { data, error } = await supabase
+      .from('room_units')
+      .select('ktx, day_nha, phong_so, unit');
 
-    // Secondary: read unit column from facilities table (phong_khu_vuc may differ from phong_so)
-    const { data: facilitiesData } = await supabase
-      .from('facilities')
-      .select('ktx, day, phong_khu_vuc, unit')
-      .not('unit', 'is', null);
-
-    const merged: RoomUnitAssignment[] = [];
-
-    // Add room_unit_assignments first (higher priority — matches worker phong_so exactly)
-    if (assignmentsData) {
-      (assignmentsData as RoomUnitAssignment[]).forEach(a => {
-        if (a.don_vi) merged.push(a);
-      });
+    if (error) {
+      console.error('[RoomOccupancyGrid] Lỗi tải room_units:', error);
+      return;
     }
 
-    // Add facilities-based assignments only if not already covered
-    if (facilitiesData) {
-      facilitiesData.forEach((f: { ktx: string; day: string; phong_khu_vuc: string; unit: string }) => {
-        if (f.unit) {
-          const alreadyExists = merged.some(
-            m => m.ktx === f.ktx && m.day === f.day && m.phong_so === f.phong_khu_vuc
-          );
-          if (!alreadyExists) {
-            merged.push({ ktx: f.ktx, day: f.day, phong_so: f.phong_khu_vuc, don_vi: f.unit });
-          }
-        }
-      });
+    if (data) {
+      setRoomUnitAssignments(data as RoomUnitAssignment[]);
     }
-
-    setRoomUnitAssignments(merged);
   }, []);
 
   useEffect(() => {
@@ -140,15 +117,15 @@ export default function RoomOccupancyGrid() {
 
   /**
    * Get display unit label for a room:
-   * 1. Admin-assigned label (priority)
+   * 1. Admin-assigned label from room_units (priority)
    * 2. Auto-detected from workers: single unit name or "Đa đơn vị"
    */
   const getRoomUnitLabel = useCallback((ktx: string, building: string, room: string): string | null => {
-    // Priority 1: admin-assigned
+    // Priority 1: admin-assigned from room_units
     const assigned = roomUnitAssignments.find(
-      a => a.ktx === ktx && a.day === building && a.phong_so === room
+      a => a.ktx === ktx && a.day_nha === building && a.phong_so === room
     );
-    if (assigned) return assigned.don_vi;
+    if (assigned) return assigned.unit;
 
     // Priority 2: auto-detect from workers
     const roomWorkers = workers.filter(
@@ -179,21 +156,21 @@ export default function RoomOccupancyGrid() {
   const drawerAdminUnit = useMemo(() => {
     if (!drawerRoom) return undefined;
     const a = roomUnitAssignments.find(
-      x => x.ktx === drawerRoom.ktx && x.day === drawerRoom.building && x.phong_so === drawerRoom.room
+      x => x.ktx === drawerRoom.ktx && x.day_nha === drawerRoom.building && x.phong_so === drawerRoom.room
     );
-    return a?.don_vi;
+    return a?.unit;
   }, [drawerRoom, roomUnitAssignments]);
 
   // Optimistically update roomUnitAssignments after admin saves a unit
   const handleUnitUpdated = useCallback((newUnit: string | null) => {
     if (!drawerRoom) return;
-    const { ktx, building: day, room: phong_so } = drawerRoom;
+    const { ktx, building: day_nha, room: phong_so } = drawerRoom;
     setRoomUnitAssignments(prev => {
       const filtered = prev.filter(
-        a => !(a.ktx === ktx && a.day === day && a.phong_so === phong_so)
+        a => !(a.ktx === ktx && a.day_nha === day_nha && a.phong_so === phong_so)
       );
       if (newUnit) {
-        return [...filtered, { ktx, day, phong_so, don_vi: newUnit }];
+        return [...filtered, { ktx, day_nha, phong_so, unit: newUnit }];
       }
       return filtered;
     });
