@@ -47,10 +47,40 @@ export default function RoomOccupancyGrid() {
   // Fetch admin-assigned unit labels from Supabase
   const fetchRoomUnitAssignments = useCallback(async () => {
     const supabase = createClient();
-    const { data } = await supabase
+
+    // Primary: read unit column from facilities table
+    const { data: facilitiesData } = await supabase
+      .from('facilities')
+      .select('ktx, day, phong_khu_vuc, unit')
+      .not('unit', 'is', null);
+
+    // Secondary: read from room_unit_assignments (legacy / fallback)
+    const { data: assignmentsData } = await supabase
       .from('room_unit_assignments')
       .select('ktx, day, phong_so, don_vi');
-    if (data) setRoomUnitAssignments(data as RoomUnitAssignment[]);
+
+    const merged: RoomUnitAssignment[] = [];
+
+    // Add facilities-based assignments first (higher priority)
+    if (facilitiesData) {
+      facilitiesData.forEach((f: { ktx: string; day: string; phong_khu_vuc: string; unit: string }) => {
+        if (f.unit) {
+          merged.push({ ktx: f.ktx, day: f.day, phong_so: f.phong_khu_vuc, don_vi: f.unit });
+        }
+      });
+    }
+
+    // Add room_unit_assignments only if not already covered by facilities
+    if (assignmentsData) {
+      (assignmentsData as RoomUnitAssignment[]).forEach(a => {
+        const alreadyExists = merged.some(
+          m => m.ktx === a.ktx && m.day === a.day && m.phong_so === a.phong_so
+        );
+        if (!alreadyExists) merged.push(a);
+      });
+    }
+
+    setRoomUnitAssignments(merged);
   }, []);
 
   useEffect(() => {

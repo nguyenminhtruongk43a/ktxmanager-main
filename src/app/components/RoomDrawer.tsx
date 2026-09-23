@@ -31,6 +31,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
   const [localUnit, setLocalUnit] = useState<string | null>(adminAssignedUnit ?? null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     setUnitInput(adminAssignedUnit ?? '');
@@ -46,61 +47,85 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
   const handleSaveUnit = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
+    setSaveSuccess(false);
     try {
       const supabase = createClient();
       const trimmed = unitInput.trim();
+
       if (trimmed === '') {
-        // Delete assignment if empty
+        // Clear unit on facilities row
         const { error } = await supabase
+          .from('facilities')
+          .update({ unit: null })
+          .eq('ktx', ktx)
+          .eq('day', buildingRaw)
+          .eq('phong_khu_vuc', room);
+        if (error) throw new Error(error.message || JSON.stringify(error));
+
+        // Also clean up room_unit_assignments if exists
+        await supabase
           .from('room_unit_assignments')
           .delete()
           .eq('ktx', ktx)
           .eq('day', buildingRaw)
           .eq('phong_so', room);
-        if (error) throw new Error(error.message || JSON.stringify(error));
+
         setLocalUnit(null);
         onUnitUpdated?.(null);
       } else {
-        // Try upsert first
-        const { error: upsertError } = await supabase
-          .from('room_unit_assignments')
-          .upsert(
-            { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed },
-            { onConflict: 'ktx,day,phong_so' }
-          );
+        // Update unit column on facilities row
+        const { error: facilityError } = await supabase
+          .from('facilities')
+          .update({ unit: trimmed })
+          .eq('ktx', ktx)
+          .eq('day', buildingRaw)
+          .eq('phong_khu_vuc', room);
 
-        if (upsertError) {
-          // Fallback: check if row exists, then update or insert
-          const { data: existing, error: selectError } = await supabase
+        if (facilityError) {
+          // Fallback: upsert into room_unit_assignments
+          const { error: upsertError } = await supabase
             .from('room_unit_assignments')
-            .select('id')
-            .eq('ktx', ktx)
-            .eq('day', buildingRaw)
-            .eq('phong_so', room)
-            .maybeSingle();
+            .upsert(
+              { ktx, day: buildingRaw, phong_so: room, don_vi: trimmed },
+              { onConflict: 'ktx,day,phong_so' }
+            );
 
-          if (selectError) throw new Error(selectError.message || JSON.stringify(selectError));
-
-          if (existing) {
-            const { error: updateError } = await supabase
+          if (upsertError) {
+            // Final fallback: check-then-update/insert
+            const { data: existing, error: selectError } = await supabase
               .from('room_unit_assignments')
-              .update({ don_vi: trimmed })
+              .select('id')
               .eq('ktx', ktx)
               .eq('day', buildingRaw)
-              .eq('phong_so', room);
-            if (updateError) throw new Error(updateError.message || JSON.stringify(updateError));
-          } else {
-            const { error: insertError } = await supabase
-              .from('room_unit_assignments')
-              .insert({ ktx, day: buildingRaw, phong_so: room, don_vi: trimmed });
-            if (insertError) throw new Error(insertError.message || JSON.stringify(insertError));
+              .eq('phong_so', room)
+              .maybeSingle();
+
+            if (selectError) throw new Error(selectError.message || JSON.stringify(selectError));
+
+            if (existing) {
+              const { error: updateError } = await supabase
+                .from('room_unit_assignments')
+                .update({ don_vi: trimmed })
+                .eq('ktx', ktx)
+                .eq('day', buildingRaw)
+                .eq('phong_so', room);
+              if (updateError) throw new Error(updateError.message || JSON.stringify(updateError));
+            } else {
+              const { error: insertError } = await supabase
+                .from('room_unit_assignments')
+                .insert({ ktx, day: buildingRaw, phong_so: room, don_vi: trimmed });
+              if (insertError) throw new Error(insertError.message || JSON.stringify(insertError));
+            }
           }
         }
 
         setLocalUnit(trimmed);
         onUnitUpdated?.(trimmed);
       }
+
       setIsEditingUnit(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Lỗi lưu đơn vị');
     } finally {
@@ -214,6 +239,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
             )}
           </div>
           {saveError && <p className="text-xs text-red-500 mt-1">{saveError}</p>}
+          {saveSuccess && <p className="text-xs text-green-600 mt-1">✓ Lưu đơn vị thành công!</p>}
           {isAdmin && !isEditingUnit && (
             <p className="text-[10px] text-muted-foreground mt-1">
               {localUnit
