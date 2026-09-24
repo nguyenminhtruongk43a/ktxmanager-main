@@ -1232,6 +1232,7 @@ export default function WorkerManagementClient() {
         'Họ và Tên': w.hoVaTen,
         'Mã NV': w.maNV,
         'Tiểu Đoàn': w.tieuDoan,
+        'Đơn vị': w.donVi || '',
         'KTX': w.ktx,
         'Dãy': w.day,
         'Phòng': w.phongSo,

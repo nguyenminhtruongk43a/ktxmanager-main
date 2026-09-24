@@ -33,16 +33,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
   const [savingNote, setSavingNote] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteSuccess, setNoteSuccess] = useState(false);
-
-  useEffect(() => {
-    setNoteInput(roomNote ?? '');
-  }, [roomNote]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
+  const [loadingNote, setLoadingNote] = useState(false);
 
   /** Resolve the effective day_nha value for Supabase queries */
   const resolveEffectiveDayNha = useCallback((): string => {
@@ -56,6 +47,47 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
     if (titleMatch) return titleMatch[1].trim();
     return building || '';
   }, [buildingRaw, building]);
+
+  // On open: fetch the latest room_note directly from Supabase to ensure freshness
+  useEffect(() => {
+    // Initialize from prop immediately (fast path)
+    setNoteInput(roomNote ?? '');
+
+    if (!isAdmin) return;
+
+    // Then fetch fresh from DB to catch any updates
+    const fetchNote = async () => {
+      setLoadingNote(true);
+      try {
+        const supabase = createClient();
+        const effectiveDayNha = resolveEffectiveDayNha();
+        const { data, error } = await supabase
+          .from('room_units')
+          .select('room_note')
+          .eq('ktx', ktx)
+          .eq('day_nha', effectiveDayNha)
+          .eq('phong_so', room)
+          .maybeSingle();
+
+        if (!error && data) {
+          setNoteInput(data.room_note ?? '');
+        }
+      } catch {
+        // Silently fall back to prop value
+      } finally {
+        setLoadingNote(false);
+      }
+    };
+
+    fetchNote();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ktx, room, buildingRaw, building]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   /** Save room_note to room_units table */
   const handleSaveRoomNote = useCallback(async () => {
@@ -116,9 +148,10 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
 
       console.log('[RoomDrawer] ✅ Đã lưu ghi chú thành công!', { ktx, day_nha: effectiveDayNha, phong_so: room, room_note: trimmed || null });
 
+      // Update state immediately (optimistic)
       onRoomNoteUpdated?.(trimmed || null);
       setNoteSuccess(true);
-      setTimeout(() => setNoteSuccess(false), 2500);
+      setTimeout(() => setNoteSuccess(false), 3000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[RoomDrawer] ❌ Lỗi lưu ghi chú:', msg);
@@ -155,6 +188,7 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
             <div className="flex items-center gap-2 mb-2">
               <FileText size={13} className="text-amber-500 flex-shrink-0" />
               <span className="text-xs font-semibold text-amber-700">Ghi chú phòng</span>
+              {loadingNote && <span className="text-[10px] text-amber-400 ml-auto">Đang tải...</span>}
             </div>
             <textarea
               value={noteInput}
@@ -162,16 +196,20 @@ export default function RoomDrawer({ ktx, building, buildingRaw, room, workers, 
               placeholder="Điền thông tin tự do: loại đơn vị, chú thích đặc biệt, tên phòng..."
               rows={3}
               className="w-full text-xs border border-amber-300 rounded px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50 resize-none"
-              disabled={savingNote}
+              disabled={savingNote || loadingNote}
             />
             <div className="flex items-center justify-between mt-1.5">
               <div>
                 {noteError && <p className="text-xs text-red-500">{noteError}</p>}
-                {noteSuccess && <p className="text-xs text-green-600">✓ Đã lưu ghi chú thành công!</p>}
+                {noteSuccess && (
+                  <p className="text-xs text-green-600 font-semibold flex items-center gap-1">
+                    <span>✓</span> Đã lưu ghi chú thành công!
+                  </p>
+                )}
               </div>
               <button
                 onClick={handleSaveRoomNote}
-                disabled={savingNote}
+                disabled={savingNote || loadingNote}
                 className="flex-shrink-0 px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition-colors disabled:opacity-50"
               >
                 {savingNote ? 'Đang lưu...' : 'Lưu ghi chú'}
