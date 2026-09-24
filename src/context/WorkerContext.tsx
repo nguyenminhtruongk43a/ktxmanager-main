@@ -259,6 +259,11 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteWorker = useCallback(async (id: string) => {
+    // Set deleted_at for fluctuation tracking before hard delete
+    await supabase
+      .from('workers')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
     const { error } = await supabase
       .from('workers')
       .delete()
@@ -268,6 +273,11 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
 
   const deleteWorkers = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
+    // Set deleted_at for fluctuation tracking before hard delete
+    await supabase
+      .from('workers')
+      .update({ deleted_at: new Date().toISOString() })
+      .in('id', ids);
     const { error } = await supabase
       .from('workers')
       .delete()
@@ -276,6 +286,11 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteAllWorkers = useCallback(async () => {
+    // Set deleted_at for fluctuation tracking before hard delete
+    await supabase
+      .from('workers')
+      .update({ deleted_at: new Date().toISOString() })
+      .neq('id', '___never___');
     const { error } = await supabase
       .from('workers')
       .delete()
