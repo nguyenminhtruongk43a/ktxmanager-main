@@ -259,38 +259,70 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteWorker = useCallback(async (id: string) => {
-    // Set deleted_at for fluctuation tracking before hard delete
-    await supabase
-      .from('workers')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
+    // Log deletion to worker_deletion_log BEFORE hard delete
+    // This persists the record even after the worker row is removed
+    const workerToDelete = workers.find(w => w.id === id);
+    if (workerToDelete) {
+      await supabase
+        .from('worker_deletion_log')
+        .insert({
+          worker_id: id,
+          ho_va_ten: workerToDelete.hoVaTen || null,
+          ma_nv: workerToDelete.maNV || null,
+          ktx: workerToDelete.ktx || null,
+          day: workerToDelete.day || null,
+          deleted_at: new Date().toISOString(),
+        });
+    }
     const { error } = await supabase
       .from('workers')
       .delete()
       .eq('id', id);
     if (error) throw new Error(error.message);
-  }, []);
+  }, [workers]);
 
   const deleteWorkers = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
-    // Set deleted_at for fluctuation tracking before hard delete
-    await supabase
-      .from('workers')
-      .update({ deleted_at: new Date().toISOString() })
-      .in('id', ids);
+    // Log all deletions to worker_deletion_log BEFORE hard delete
+    const now = new Date().toISOString();
+    const logRows = ids.map(id => {
+      const w = workers.find(wk => wk.id === id);
+      return {
+        worker_id: id,
+        ho_va_ten: w?.hoVaTen || null,
+        ma_nv: w?.maNV || null,
+        ktx: w?.ktx || null,
+        day: w?.day || null,
+        deleted_at: now,
+      };
+    });
+    if (logRows.length > 0) {
+      await supabase.from('worker_deletion_log').insert(logRows);
+    }
     const { error } = await supabase
       .from('workers')
       .delete()
       .in('id', ids);
     if (error) throw new Error(error.message);
-  }, []);
+  }, [workers]);
 
   const deleteAllWorkers = useCallback(async () => {
-    // Set deleted_at for fluctuation tracking before hard delete
-    await supabase
-      .from('workers')
-      .update({ deleted_at: new Date().toISOString() })
-      .neq('id', '___never___');
+    // Log all current workers to worker_deletion_log BEFORE hard delete
+    const now = new Date().toISOString();
+    if (workers.length > 0) {
+      const BATCH = 200;
+      for (let i = 0; i < workers.length; i += BATCH) {
+        const batch = workers.slice(i, i + BATCH).map(w => ({
+          worker_id: w.id,
+          ho_va_ten: w.hoVaTen || null,
+          ma_nv: w.maNV || null,
+          ktx: w.ktx || null,
+          day: w.day || null,
+          deleted_at: now,
+        }));
+        await supabase.from('worker_deletion_log').insert(batch);
+      }
+    }
     const { error } = await supabase
       .from('workers')
       .delete()
@@ -298,7 +330,7 @@ export function WorkerProvider({ children }: { children: React.ReactNode }) {
     if (error) throw new Error(error.message);
     setWorkers([]);
     setTotalWorkerCount(0);
-  }, []);
+  }, [workers]);
 
   const importWorkers = useCallback(async (rows: Worker[]) => {
     if (rows.length === 0) return;
