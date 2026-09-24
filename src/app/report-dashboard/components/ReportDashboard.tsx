@@ -1,20 +1,22 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { Users, LayoutGrid, Percent, AlertCircle, VenusAndMars, HardHat, Building2, ArrowRightLeft, Search, Filter, Calendar, TrendingUp, UserPlus, UserMinus } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Users, LayoutGrid, Percent, AlertCircle, VenusAndMars, HardHat, Building2, TrendingUp, TrendingDown, UserPlus, UserMinus, ArrowRightLeft, Calendar, Clock, RefreshCw, Filter, X,  } from 'lucide-react';
 import { useWorkers } from '@/context/WorkerContext';
-import { useAudit } from '@/context/AuditContext';
 import { Worker, ROOM_CAPACITY, getUniqueBuildings, getUniqueRooms, countUniqueBuildings } from '@/data/workers';
+import { createClient } from '@/lib/supabase/client';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, LineChart, Line, ReferenceLine,
 } from 'recharts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type GenderFilter = 'all' | 'male' | 'female';
 type UnitFilter = 'all' | 'xd' | 'me' | 'vinalpha' | 'other';
 type KtxFilter = 'all' | 'KTX 1' | 'KTX 2';
-type MovementType = 'all' | 'tang' | 'giam' | 'import';
 type ActiveTab = 'tong-quan' | 'bien-dong';
+type FluctuationType = 'all' | 'tang' | 'giam' | 'rong';
+type CutoffMode = 'realtime' | '14h';
 
 interface FilterState {
   gender: GenderFilter;
@@ -24,25 +26,34 @@ interface FilterState {
   room: string;
 }
 
-interface MovementRecord {
-  id: string;
-  date: string;
-  dateISO: string;
-  workerInfo: string;
-  type: MovementType;
-  account: string;
-  note: string;
+interface FluctuationFilter {
+  dateFrom: string;
+  dateTo: string;
+  ktx: string;
+  day: string;
+  type: FluctuationType;
+  cutoffMode: CutoffMode;
+}
+
+interface DailyFluctuation {
+  ngay: string;
+  so_tang: number;
+  so_giam: number;
+  bien_dong_rong: number;
+}
+
+interface FluctuationSummary {
+  tong_tang: number;
+  tong_giam: number;
+  bien_dong_rong: number;
+  so_ngay_co_bien_dong: number;
 }
 
 const DEFAULT_FILTERS: FilterState = {
-  gender: 'all',
-  unit: 'all',
-  ktx: 'all',
-  building: '',
-  room: '',
+  gender: 'all', unit: 'all', ktx: 'all', building: '', room: '',
 };
 
-// ─── Helper functions ─────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function matchesGender(w: Worker, g: GenderFilter): boolean {
   if (g === 'all') return true;
   const gt = (w.gioiTinh || '').toLowerCase();
@@ -58,10 +69,9 @@ function matchesUnit(w: Worker, u: UnitFilter): boolean {
   if (u === 'me') return dv.includes('me') || dv.includes('cơ') || dv.includes('co');
   if (u === 'vinalpha') return dv.includes('vinalpha') || dv.includes('alpha');
   if (u === 'other') {
-    const isXd = dv.includes('xd') || dv.includes('xây') || dv.includes('xay');
-    const isMe = dv.includes('me') || dv.includes('cơ') || dv.includes('co');
-    const isVa = dv.includes('vinalpha') || dv.includes('alpha');
-    return !isXd && !isMe && !isVa;
+    return !dv.includes('xd') && !dv.includes('xây') && !dv.includes('xay') &&
+      !dv.includes('me') && !dv.includes('cơ') && !dv.includes('co') &&
+      !dv.includes('vinalpha') && !dv.includes('alpha');
   }
   return true;
 }
@@ -71,70 +81,39 @@ function matchesKtx(w: Worker, k: KtxFilter): boolean {
   return w.ktx === k;
 }
 
-/** Format ISO timestamp to YYYY-MM-DD in UTC+7 */
-function isoToDateVN(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso.slice(0, 10) || '';
-  const vnOffset = 7 * 60 * 60 * 1000;
-  const vnDate = new Date(d.getTime() + vnOffset);
-  return vnDate.toISOString().slice(0, 10);
+function getDefaultDateRange(): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10);
+  const from = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return { from, to };
 }
 
-/** Format ISO timestamp to display string in UTC+7 */
-function formatTimestampVN(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+function formatDateVN(dateStr: string): string {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}/${y}`;
 }
 
-// ─── Movement type badge ──────────────────────────────────────────────────────
-const TYPE_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  'tang': {
-    label: 'Tăng (Thêm mới)',
-    color: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    icon: <UserPlus size={12} />,
-  },
-  'giam': {
-    label: 'Giảm (Xóa)',
-    color: 'bg-rose-100 text-rose-700 border-rose-200',
-    icon: <UserMinus size={12} />,
-  },
-  'import': {
-    label: 'Import hàng loạt',
-    color: 'bg-blue-100 text-blue-700 border-blue-200',
-    icon: <ArrowRightLeft size={12} />,
-  },
-};
-
-function TypeBadge({ type }: { type: string }) {
-  const cfg = TYPE_CONFIG[type] || { label: type, color: 'bg-gray-100 text-gray-600 border-gray-200', icon: null };
+// ─── Custom Tooltip ───────────────────────────────────────────────────────────
+function CustomBarTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cfg.color}`}>
-      {cfg.icon}
-      {cfg.label}
-    </span>
+    <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-3 text-xs">
+      <p className="font-bold text-gray-700 mb-2">{formatDateVN(label)}</p>
+      {payload.map((p: any) => (
+        <div key={p.dataKey} className="flex items-center gap-2 mb-1">
+          <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: p.fill || p.stroke }} />
+          <span className="text-gray-600">{p.name}:</span>
+          <span className="font-bold" style={{ color: p.fill || p.stroke }}>{p.value}</span>
+        </div>
+      ))}
+    </div>
   );
-}
-
-// ─── Chart data builder ───────────────────────────────────────────────────────
-function buildChartData(records: MovementRecord[]) {
-  const byDate: Record<string, { date: string; 'Tăng': number; 'Giảm': number; 'Import': number }> = {};
-  records.forEach(r => {
-    const dateKey = r.date;
-    if (!byDate[dateKey]) {
-      byDate[dateKey] = { date: dateKey, 'Tăng': 0, 'Giảm': 0, 'Import': 0 };
-    }
-    if (r.type === 'tang') byDate[dateKey]['Tăng']++;
-    if (r.type === 'giam') byDate[dateKey]['Giảm']++;
-    if (r.type === 'import') byDate[dateKey]['Import']++;
-  });
-  return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ReportDashboard() {
   const { workers, loading: workersLoading } = useWorkers();
-  const { logs, loading: logsLoading } = useAudit();
   const [activeTab, setActiveTab] = useState<ActiveTab>('tong-quan');
 
   // ── Tổng quan filters ──
@@ -143,10 +122,108 @@ export default function ReportDashboard() {
     setFilters(prev => ({ ...prev, [key]: val }));
 
   // ── Biến động filters ──
-  const [mvSearch, setMvSearch] = useState('');
-  const [mvType, setMvType] = useState<MovementType>('all');
-  const [mvDateFrom, setMvDateFrom] = useState('');
-  const [mvDateTo, setMvDateTo] = useState('');
+  const defaultRange = getDefaultDateRange();
+  const [flFilter, setFlFilter] = useState<FluctuationFilter>({
+    dateFrom: defaultRange.from,
+    dateTo: defaultRange.to,
+    ktx: '',
+    day: '',
+    type: 'all',
+    cutoffMode: '14h',
+  });
+
+  // ── Biến động data ──
+  const [dailyData, setDailyData] = useState<DailyFluctuation[]>([]);
+  const [summary, setSummary] = useState<FluctuationSummary | null>(null);
+  const [flLoading, setFlLoading] = useState(false);
+  const [flError, setFlError] = useState<string | null>(null);
+  const [lastFetched, setLastFetched] = useState<string>('');
+
+  // ── Unique buildings from workers for filter ──
+  const allBuildings = useMemo(() => getUniqueBuildings(workers), [workers]);
+  const flBuildings = useMemo(() => {
+    if (!flFilter.ktx) return allBuildings;
+    return getUniqueBuildings(workers.filter(w => w.ktx === flFilter.ktx));
+  }, [workers, flFilter.ktx, allBuildings]);
+
+  // ── Fetch fluctuation data ──
+  const fetchFluctuation = useCallback(async () => {
+    setFlLoading(true);
+    setFlError(null);
+    const supabase = createClient();
+    const cutoffHour = flFilter.cutoffMode === 'realtime' ? -1 : 14;
+
+    try {
+      const [dailyRes, summaryRes] = await Promise.all([
+        supabase.rpc('get_worker_fluctuation', {
+          p_date_from: flFilter.dateFrom || null,
+          p_date_to: flFilter.dateTo || null,
+          p_ktx: flFilter.ktx || null,
+          p_day: flFilter.day || null,
+          p_cutoff_hour: cutoffHour,
+        }),
+        supabase.rpc('get_worker_fluctuation_summary', {
+          p_date_from: flFilter.dateFrom || null,
+          p_date_to: flFilter.dateTo || null,
+          p_ktx: flFilter.ktx || null,
+          p_day: flFilter.day || null,
+          p_cutoff_hour: cutoffHour,
+        }),
+      ]);
+
+      if (dailyRes.error) throw new Error(dailyRes.error.message);
+      if (summaryRes.error) throw new Error(summaryRes.error.message);
+
+      const rawDaily: DailyFluctuation[] = (dailyRes.data || []).map((r: any) => ({
+        ngay: r.ngay,
+        so_tang: Number(r.so_tang) || 0,
+        so_giam: Number(r.so_giam) || 0,
+        bien_dong_rong: Number(r.bien_dong_rong) || 0,
+      }));
+
+      setDailyData(rawDaily);
+
+      const s = summaryRes.data?.[0];
+      setSummary(s ? {
+        tong_tang: Number(s.tong_tang) || 0,
+        tong_giam: Number(s.tong_giam) || 0,
+        bien_dong_rong: Number(s.bien_dong_rong) || 0,
+        so_ngay_co_bien_dong: Number(s.so_ngay_co_bien_dong) || 0,
+      } : { tong_tang: 0, tong_giam: 0, bien_dong_rong: 0, so_ngay_co_bien_dong: 0 });
+
+      const now = new Date();
+      setLastFetched(now.toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    } catch (err: any) {
+      setFlError(err.message || 'Lỗi tải dữ liệu biến động');
+    } finally {
+      setFlLoading(false);
+    }
+  }, [flFilter]);
+
+  useEffect(() => {
+    if (activeTab === 'bien-dong') {
+      fetchFluctuation();
+    }
+  }, [activeTab, fetchFluctuation]);
+
+  // ── Filtered chart data by type ──
+  const chartData = useMemo(() => {
+    return dailyData.map(d => ({
+      date: formatDateVN(d.ngay),
+      rawDate: d.ngay,
+      'Tăng thực tế': d.so_tang,
+      'Giảm thực tế': d.so_giam,
+      'Biến động ròng': d.bien_dong_rong,
+    }));
+  }, [dailyData]);
+
+  const filteredDailyData = useMemo(() => {
+    if (flFilter.type === 'all') return dailyData;
+    if (flFilter.type === 'tang') return dailyData.filter(d => d.so_tang > 0);
+    if (flFilter.type === 'giam') return dailyData.filter(d => d.so_giam > 0);
+    if (flFilter.type === 'rong') return dailyData.filter(d => d.bien_dong_rong !== 0);
+    return dailyData;
+  }, [dailyData, flFilter.type]);
 
   // ── Tổng quan computed ──
   const filtered = useMemo(() => {
@@ -194,67 +271,9 @@ export default function ReportDashboard() {
     filters.gender !== 'all' || filters.unit !== 'all' || filters.ktx !== 'all' ||
     filters.building !== '' || filters.room !== '';
 
-  // ── Biến động: derive real movement records from audit logs ──
-  const allMovements = useMemo((): MovementRecord[] => {
-    const records: MovementRecord[] = [];
-    logs.forEach(log => {
-      const action = log.action as string;
-      let type: MovementType | null = null;
-      // Match both Vietnamese labels and English action codes stored in DB
-      if (action === 'Thêm' || action === 'CREATE') type = 'tang';
-      else if (action === 'Xóa' || action === 'DELETE') type = 'giam';
-      else if (action === 'Import' || action === 'IMPORT') type = 'import';
-      if (!type) return;
+  const hasFlFilter = flFilter.ktx || flFilter.day || flFilter.type !== 'all';
 
-      // Extract worker info from detail string
-      // Detail format: "[DD/MM/YYYY HH:mm:ss] Thêm công nhân: Nguyễn Văn A (Mã NV: NV001)"
-      // or: "[DD/MM/YYYY HH:mm:ss] Xóa công nhân: Trần Thị B (Mã NV: NV002)"
-      const detailMatch = log.detail.match(/(?:Thêm|Xóa|Import)\s+(?:công nhân[:\s]+)?(.+?)(?:\s*\(Mã NV[:\s]+[^)]+\))?(?:\s*—.*)?$/i);
-      const workerInfo = detailMatch ? detailMatch[0].replace(/^\[.*?\]\s*/, '') : log.detail.replace(/^\[.*?\]\s*/, '');
-
-      const dateISO = log.timestamp;
-      const date = isoToDateVN(dateISO);
-
-      records.push({
-        id: log.id,
-        date,
-        dateISO,
-        workerInfo,
-        type,
-        account: log.account,
-        note: log.detail.replace(/^\[.*?\]\s*/, ''),
-      });
-    });
-    // Sort newest first
-    return records.sort((a, b) => b.dateISO.localeCompare(a.dateISO));
-  }, [logs]);
-
-  const filteredMovements = useMemo(() => {
-    return allMovements.filter(r => {
-      if (mvType !== 'all' && r.type !== mvType) return false;
-      if (mvDateFrom && r.date < mvDateFrom) return false;
-      if (mvDateTo && r.date > mvDateTo) return false;
-      if (mvSearch) {
-        const q = mvSearch.toLowerCase();
-        if (!r.workerInfo.toLowerCase().includes(q) && !r.account.toLowerCase().includes(q)) return false;
-      }
-      return true;
-    });
-  }, [allMovements, mvType, mvDateFrom, mvDateTo, mvSearch]);
-
-  const mvStats = useMemo(() => ({
-    total: filteredMovements.length,
-    tang: filteredMovements.filter(r => r.type === 'tang').length,
-    giam: filteredMovements.filter(r => r.type === 'giam').length,
-    importCount: filteredMovements.filter(r => r.type === 'import').length,
-  }), [filteredMovements]);
-
-  // Chart data: group by date (for chart, use oldest-first order)
-  const chartData = useMemo(() => buildChartData([...filteredMovements].reverse()), [filteredMovements]);
-
-  const loading = workersLoading || logsLoading;
-
-  if (loading) {
+  if (workersLoading) {
     return (
       <div className="p-12 text-center text-gray-500 font-medium animate-pulse">
         Đang đồng bộ dữ liệu thực tế từ Supabase Database...
@@ -269,7 +288,7 @@ export default function ReportDashboard() {
         <button
           onClick={() => setActiveTab('tong-quan')}
           className={`px-5 py-3 text-sm font-semibold rounded-t-lg transition-all ${
-            activeTab === 'tong-quan' ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            activeTab === 'tong-quan' ?'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' :'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
           }`}
         >
           📊 Tổng quan
@@ -278,10 +297,10 @@ export default function ReportDashboard() {
           onClick={() => setActiveTab('bien-dong')}
           className={`px-5 py-3 text-sm font-semibold rounded-t-lg transition-all ${
             activeTab === 'bien-dong'
-              ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              ? 'bg-white border border-b-white border-gray-200 text-blue-600 -mb-px' :'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
           }`}
         >
-          🔄 Biến động
+          🔄 Biến động nhân sự
         </button>
       </div>
 
@@ -343,7 +362,7 @@ export default function ReportDashboard() {
                   <label className="text-sm font-medium text-foreground mb-1 opacity-0">x</label>
                   <button onClick={() => setFilters(DEFAULT_FILTERS)}
                     className="flex items-center gap-1 px-3 py-2 rounded-lg bg-transparent text-muted-foreground text-sm font-medium hover:bg-muted hover:text-foreground transition-all">
-                    ✕ Xóa bộ lọc
+                    <X size={14} /> Xóa bộ lọc
                   </button>
                 </div>
               )}
@@ -363,7 +382,7 @@ export default function ReportDashboard() {
             <div className="bg-white rounded-xl border p-5 shadow-sm flex items-center justify-between">
               <div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">SỐ DÃY / SỐ PHÒNG</p>
-                <h3 className="text-3xl font-extrabold text-gray-900 mt-1">{stats.buildingCount} dãy / {stats.roomCount} phòng</h3>
+                <h3 className="text-3xl font-extrabold text-gray-900 mt-1">{stats.buildingCount} / {stats.roomCount}</h3>
                 <p className="text-xs text-gray-500 mt-1">Sức chứa: {stats.capacity} chỗ</p>
               </div>
               <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><LayoutGrid className="w-6 h-6" /></div>
@@ -451,170 +470,346 @@ export default function ReportDashboard() {
       {/* TAB: BIẾN ĐỘNG                                                        */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'bien-dong' && (
-        <div className="space-y-6">
-          {/* ── Info Banner ── */}
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-700 font-medium">
-            <TrendingUp size={14} className="flex-shrink-0" />
-            Dữ liệu biến động được tổng hợp trực tiếp từ nhật ký thao tác thực tế — tự động cập nhật khi thêm mới hoặc xóa công nhân.
+        <div className="space-y-5">
+
+          {/* ── Filter Bar ── */}
+          <div className="bg-white rounded-xl border shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Filter size={15} className="text-blue-500" />
+              <span className="text-sm font-bold text-gray-700">Bộ lọc biến động</span>
+              {hasFlFilter && (
+                <button
+                  onClick={() => setFlFilter(prev => ({ ...prev, ktx: '', day: '', type: 'all' }))}
+                  className="ml-auto flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X size={12} /> Xóa lọc
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-3 items-end">
+              {/* Date From */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Từ ngày</label>
+                <input
+                  type="date"
+                  value={flFilter.dateFrom}
+                  onChange={e => setFlFilter(prev => ({ ...prev, dateFrom: e.target.value }))}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-[140px]"
+                />
+              </div>
+              {/* Date To */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Đến ngày</label>
+                <input
+                  type="date"
+                  value={flFilter.dateTo}
+                  onChange={e => setFlFilter(prev => ({ ...prev, dateTo: e.target.value }))}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-[140px]"
+                />
+              </div>
+              {/* KTX */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Khu vực / KTX</label>
+                <select
+                  value={flFilter.ktx}
+                  onChange={e => setFlFilter(prev => ({ ...prev, ktx: e.target.value, day: '' }))}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-[130px]"
+                >
+                  <option value="">Tất cả KTX</option>
+                  <option value="KTX 1">KTX 1</option>
+                  <option value="KTX 2">KTX 2</option>
+                </select>
+              </div>
+              {/* Dãy nhà */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Dãy nhà</label>
+                <select
+                  value={flFilter.day}
+                  onChange={e => setFlFilter(prev => ({ ...prev, day: e.target.value }))}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-[130px]"
+                >
+                  <option value="">Tất cả dãy</option>
+                  {flBuildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              {/* Loại biến động */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Loại biến động</label>
+                <select
+                  value={flFilter.type}
+                  onChange={e => setFlFilter(prev => ({ ...prev, type: e.target.value as FluctuationType }))}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-[160px]"
+                >
+                  <option value="all">Tất cả loại</option>
+                  <option value="tang">Thực tế tăng</option>
+                  <option value="giam">Thực tế giảm</option>
+                  <option value="rong">Tổng biến động ròng</option>
+                </select>
+              </div>
+              {/* Cutoff mode */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mốc chốt số liệu</label>
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+                  <button
+                    onClick={() => setFlFilter(prev => ({ ...prev, cutoffMode: '14h' }))}
+                    className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${
+                      flFilter.cutoffMode === '14h' ?'bg-blue-600 text-white font-semibold' :'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Clock size={13} /> Chốt 14:00
+                  </button>
+                  <button
+                    onClick={() => setFlFilter(prev => ({ ...prev, cutoffMode: 'realtime' }))}
+                    className={`flex items-center gap-1.5 px-3 py-2 border-l border-gray-200 transition-colors ${
+                      flFilter.cutoffMode === 'realtime' ?'bg-emerald-600 text-white font-semibold' :'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <RefreshCw size={13} /> Thời gian thực
+                  </button>
+                </div>
+              </div>
+              {/* Apply button */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide opacity-0">x</label>
+                <button
+                  onClick={fetchFluctuation}
+                  disabled={flLoading}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+                >
+                  <RefreshCw size={14} className={flLoading ? 'animate-spin' : ''} />
+                  {flLoading ? 'Đang tải...' : 'Cập nhật'}
+                </button>
+              </div>
+            </div>
+            {/* Mode indicator */}
+            <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+              {flFilter.cutoffMode === '14h' ? (
+                <><Clock size={12} className="text-blue-500" /> <span>Chốt số liệu lúc <strong>14:00</strong> hàng ngày — phản ánh tình trạng nhân sự buổi chiều</span></>
+              ) : (
+                <><RefreshCw size={12} className="text-emerald-500" /> <span>Xem <strong>thời gian thực</strong> — bao gồm mọi thay đổi đến thời điểm hiện tại</span></>
+              )}
+              {lastFetched && <span className="ml-auto text-gray-400">Cập nhật lúc {lastFetched}</span>}
+            </div>
           </div>
 
-          {/* ── KPI Summary Cards ── */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-gray-100 rounded-lg"><ArrowRightLeft size={18} className="text-gray-600" /></div>
-              <div>
-                <p className="text-xs text-gray-400 font-semibold uppercase">Tổng biến động</p>
-                <p className="text-2xl font-extrabold text-gray-900">{mvStats.total}</p>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-emerald-50 rounded-lg"><UserPlus size={18} className="text-emerald-600" /></div>
-              <div>
-                <p className="text-xs text-emerald-600 font-semibold uppercase">Tăng (Thêm mới)</p>
-                <p className="text-2xl font-extrabold text-emerald-700">{mvStats.tang}</p>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-rose-50 rounded-lg"><UserMinus size={18} className="text-rose-600" /></div>
-              <div>
-                <p className="text-xs text-rose-600 font-semibold uppercase">Giảm (Xóa)</p>
-                <p className="text-2xl font-extrabold text-rose-700">{mvStats.giam}</p>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl border p-4 shadow-sm flex items-center gap-3">
-              <div className="p-2 bg-blue-50 rounded-lg"><ArrowRightLeft size={18} className="text-blue-600" /></div>
-              <div>
-                <p className="text-xs text-blue-600 font-semibold uppercase">Import hàng loạt</p>
-                <p className="text-2xl font-extrabold text-blue-700">{mvStats.importCount}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* ── Bar Chart ── */}
-          {chartData.length > 0 && (
-            <div className="bg-white rounded-xl border p-5 shadow-sm">
-              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <TrendingUp size={18} className="text-blue-500" />
-                Biểu đồ biến động theo ngày
-              </h4>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="Tăng" fill="#10b981" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Giảm" fill="#f43f5e" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Import" fill="#3b82f6" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+          {/* ── Error Banner ── */}
+          {flError && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+              <AlertCircle size={16} className="flex-shrink-0" />
+              <span>{flError}</span>
+              <button onClick={fetchFluctuation} className="ml-auto text-xs underline hover:no-underline">Thử lại</button>
             </div>
           )}
 
-          {/* ── Filters ── */}
-          <div className="bg-white rounded-xl border p-4 shadow-sm">
-            <div className="flex flex-wrap gap-3 items-end">
-              {/* Search */}
-              <div className="flex flex-col gap-1 min-w-[200px] flex-1">
-                <label className="text-sm font-medium text-gray-700 mb-1">Tìm kiếm</label>
-                <div className="relative">
-                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Tên công nhân hoặc tài khoản..."
-                    value={mvSearch}
-                    onChange={e => setMvSearch(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  />
+          {/* ── KPI Summary Cards ── */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-white rounded-xl border p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="p-2 bg-emerald-50 rounded-lg"><UserPlus size={16} className="text-emerald-600" /></div>
+                <p className="text-xs font-bold text-emerald-600 uppercase tracking-wide">Tổng tăng thực tế</p>
+              </div>
+              <p className="text-3xl font-extrabold text-emerald-700">
+                {flLoading ? '—' : (summary?.tong_tang ?? 0).toLocaleString('vi-VN')}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">công nhân được thêm vào</p>
+            </div>
+            <div className="bg-white rounded-xl border p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="p-2 bg-rose-50 rounded-lg"><UserMinus size={16} className="text-rose-600" /></div>
+                <p className="text-xs font-bold text-rose-600 uppercase tracking-wide">Tổng giảm thực tế</p>
+              </div>
+              <p className="text-3xl font-extrabold text-rose-700">
+                {flLoading ? '—' : (summary?.tong_giam ?? 0).toLocaleString('vi-VN')}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">công nhân đã rời đi</p>
+            </div>
+            <div className="bg-white rounded-xl border p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`p-2 rounded-lg ${(summary?.bien_dong_rong ?? 0) >= 0 ? 'bg-blue-50' : 'bg-orange-50'}`}>
+                  {(summary?.bien_dong_rong ?? 0) >= 0
+                    ? <TrendingUp size={16} className="text-blue-600" />
+                    : <TrendingDown size={16} className="text-orange-600" />}
                 </div>
+                <p className={`text-xs font-bold uppercase tracking-wide ${(summary?.bien_dong_rong ?? 0) >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
+                  Biến động ròng
+                </p>
               </div>
-
-              {/* Type */}
-              <div className="flex flex-col gap-1 min-w-[160px]">
-                <label className="text-sm font-medium text-gray-700 mb-1">Loại biến động</label>
-                <select value={mvType} onChange={e => setMvType(e.target.value as MovementType)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-                  <option value="all">Tất cả loại</option>
-                  <option value="tang">Tăng (Thêm mới)</option>
-                  <option value="giam">Giảm (Xóa)</option>
-                  <option value="import">Import hàng loạt</option>
-                </select>
+              <p className={`text-3xl font-extrabold ${(summary?.bien_dong_rong ?? 0) >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>
+                {flLoading ? '—' : (
+                  (summary?.bien_dong_rong ?? 0) > 0
+                    ? `+${(summary?.bien_dong_rong ?? 0).toLocaleString('vi-VN')}`
+                    : (summary?.bien_dong_rong ?? 0).toLocaleString('vi-VN')
+                )}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">tăng - giảm trong kỳ</p>
+            </div>
+            <div className="bg-white rounded-xl border p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="p-2 bg-gray-100 rounded-lg"><Calendar size={16} className="text-gray-600" /></div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Ngày có biến động</p>
               </div>
-
-              {/* Date From */}
-              <div className="flex flex-col gap-1 min-w-[140px]">
-                <label className="text-sm font-medium text-gray-700 mb-1">Từ ngày</label>
-                <input type="date" value={mvDateFrom} onChange={e => setMvDateFrom(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
-              </div>
-
-              {/* Date To */}
-              <div className="flex flex-col gap-1 min-w-[140px]">
-                <label className="text-sm font-medium text-gray-700 mb-1">Đến ngày</label>
-                <input type="date" value={mvDateTo} onChange={e => setMvDateTo(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
-              </div>
-
-              {/* Clear */}
-              {(mvSearch || mvType !== 'all' || mvDateFrom || mvDateTo) && (
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-gray-700 mb-1 opacity-0">x</label>
-                  <button
-                    onClick={() => { setMvSearch(''); setMvType('all'); setMvDateFrom(''); setMvDateTo(''); }}
-                    className="px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-all">
-                    ✕ Xóa lọc
-                  </button>
-                </div>
-              )}
+              <p className="text-3xl font-extrabold text-gray-800">
+                {flLoading ? '—' : (summary?.so_ngay_co_bien_dong ?? 0).toLocaleString('vi-VN')}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">ngày trong khoảng đã chọn</p>
             </div>
           </div>
 
-          {/* ── History Table ── */}
-          <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b flex items-center justify-between">
-              <h4 className="font-bold text-gray-800 flex items-center gap-2">
-                <Calendar size={16} className="text-blue-500" />
-                Lịch sử biến động nhân sự
-              </h4>
-              <span className="text-xs text-gray-400 font-medium">{filteredMovements.length} bản ghi</span>
+          {/* ── Charts ── */}
+          {flLoading ? (
+            <div className="bg-white rounded-xl border p-10 text-center text-gray-400 animate-pulse shadow-sm">
+              Đang tải dữ liệu biến động từ Supabase...
             </div>
-
-            {filteredMovements.length === 0 ? (
-              <div className="py-16 text-center text-gray-400">
-                <ArrowRightLeft size={36} className="mx-auto mb-3 opacity-30" />
-                <p className="text-sm font-medium">
-                  {allMovements.length === 0
-                    ? 'Chưa có dữ liệu biến động — sẽ tự động ghi nhận khi thêm hoặc xóa công nhân' :'Không có dữ liệu biến động phù hợp với bộ lọc'}
-                </p>
-                <p className="text-xs mt-1">Thử thay đổi bộ lọc hoặc khoảng thời gian</p>
+          ) : chartData.length === 0 ? (
+            <div className="bg-white rounded-xl border p-10 text-center shadow-sm">
+              <ArrowRightLeft size={36} className="mx-auto mb-3 text-gray-300" />
+              <p className="text-sm font-medium text-gray-500">Không có dữ liệu biến động trong khoảng thời gian đã chọn</p>
+              <p className="text-xs text-gray-400 mt-1">Thử mở rộng khoảng thời gian hoặc bỏ bộ lọc</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Bar chart: Tăng / Giảm */}
+              <div className="bg-white rounded-xl border p-5 shadow-sm">
+                <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm">
+                  <UserPlus size={16} className="text-emerald-500" />
+                  Tăng / Giảm thực tế theo ngày
+                </h4>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={chartData} margin={{ top: 4, right: 8, left: -10, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                    <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                    <Tooltip content={<CustomBarTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="Tăng thực tế" fill="#10b981" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="Giảm thực tế" fill="#f43f5e" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            ) : (
+
+              {/* Line chart: Biến động ròng */}
+              <div className="bg-white rounded-xl border p-5 shadow-sm">
+                <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm">
+                  <TrendingUp size={16} className="text-blue-500" />
+                  Xu hướng biến động ròng theo ngày
+                </h4>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={chartData} margin={{ top: 4, right: 8, left: -10, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                    <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                    <Tooltip content={<CustomBarTooltip />} />
+                    <ReferenceLine y={0} stroke="#d1d5db" strokeDasharray="4 4" />
+                    <Line
+                      type="monotone"
+                      dataKey="Biến động ròng"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: '#3b82f6' }}
+                      activeDot={{ r: 5 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* ── Daily Detail Table ── */}
+          {!flLoading && filteredDailyData.length > 0 && (
+            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b flex items-center justify-between">
+                <h4 className="font-bold text-gray-800 flex items-center gap-2 text-sm">
+                  <Calendar size={15} className="text-blue-500" />
+                  Chi tiết biến động theo ngày
+                </h4>
+                <span className="text-xs text-gray-400 font-medium">{filteredDailyData.length} ngày có dữ liệu</span>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b">
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Thời gian</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Loại biến động</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">Chi tiết</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Tài khoản thực hiện</th>
+                      <th className="text-left px-5 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">Ngày</th>
+                      <th className="text-center px-4 py-3 text-xs font-bold text-emerald-600 uppercase tracking-wider">Tăng thực tế</th>
+                      <th className="text-center px-4 py-3 text-xs font-bold text-rose-600 uppercase tracking-wider">Giảm thực tế</th>
+                      <th className="text-center px-4 py-3 text-xs font-bold text-blue-600 uppercase tracking-wider">Biến động ròng</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredMovements.map((r, idx) => (
-                      <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-50/30'}`}>
-                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap font-mono text-xs">
-                          {formatTimestampVN(r.dateISO)}
+                    {filteredDailyData.map((row, idx) => (
+                      <tr key={row.ngay} className={`hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-50/30'}`}>
+                        <td className="px-5 py-3 font-medium text-gray-700">{formatDateVN(row.ngay)}</td>
+                        <td className="px-4 py-3 text-center">
+                          {row.so_tang > 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                              <UserPlus size={11} /> +{row.so_tang}
+                            </span>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap"><TypeBadge type={r.type} /></td>
-                        <td className="px-4 py-3 text-gray-700 text-xs max-w-sm">{r.note}</td>
-                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs font-medium">{r.account}</td>
+                        <td className="px-4 py-3 text-center">
+                          {row.so_giam > 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-700">
+                              <UserMinus size={11} /> -{row.so_giam}
+                            </span>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+                            row.bien_dong_rong > 0
+                              ? 'bg-blue-100 text-blue-700'
+                              : row.bien_dong_rong < 0
+                              ? 'bg-orange-100 text-orange-700' :'bg-gray-100 text-gray-500'
+                          }`}>
+                            {row.bien_dong_rong > 0 ? <TrendingUp size={11} /> : row.bien_dong_rong < 0 ? <TrendingDown size={11} /> : null}
+                            {row.bien_dong_rong > 0 ? `+${row.bien_dong_rong}` : row.bien_dong_rong}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
+                  {/* Summary row */}
+                  <tfoot>
+                    <tr className="bg-gray-50 border-t-2 border-gray-200">
+                      <td className="px-5 py-3 text-xs font-bold text-gray-600 uppercase">Tổng cộng</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="text-sm font-extrabold text-emerald-700">
+                          +{filteredDailyData.reduce((s, r) => s + r.so_tang, 0).toLocaleString('vi-VN')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="text-sm font-extrabold text-rose-700">
+                          -{filteredDailyData.reduce((s, r) => s + r.so_giam, 0).toLocaleString('vi-VN')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {(() => {
+                          const net = filteredDailyData.reduce((s, r) => s + r.bien_dong_rong, 0);
+                          return (
+                            <span className={`text-sm font-extrabold ${net >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>
+                              {net > 0 ? `+${net.toLocaleString('vi-VN')}` : net.toLocaleString('vi-VN')}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
-            )}
+            </div>
+          )}
+
+          {/* ── Info note about data source ── */}
+          <div className="flex items-start gap-2 px-4 py-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-700">
+            <TrendingUp size={14} className="flex-shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold">Nguồn dữ liệu:</span> Số liệu biến động được tính toán trực tiếp từ bảng{' '}
+              <code className="bg-blue-100 px-1 rounded font-mono">workers</code> — đếm công nhân được thêm vào theo{' '}
+              <code className="bg-blue-100 px-1 rounded font-mono">created_at</code> và công nhân rời đi theo{' '}
+              <code className="bg-blue-100 px-1 rounded font-mono">deleted_at</code>. Không sử dụng nhật ký thao tác (audit logs).
+            </div>
           </div>
         </div>
       )}
