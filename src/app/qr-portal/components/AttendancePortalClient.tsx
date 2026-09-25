@@ -959,11 +959,15 @@ export default function AttendancePortalClient() {
                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cfg.color}`}>{cfg.label}</span>
                                   )}
                                 </div>
-                                <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
-                                  {rec.ktx && <span>{rec.ktx}</span>}
-                                  {rec.day && <span>Dãy {rec.day}</span>}
-                                  {rec.phong_so && <span>Phòng {rec.phong_so}</span>}
-                                  <span>{new Date(rec.checked_in_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+                                <div className="mt-1 flex flex-col gap-0.5">
+                                  {(rec.ktx || rec.day || rec.phong_so) && (
+                                    <p className="text-xs font-medium text-emerald-700">
+                                      {[rec.ktx, rec.day ? `Dãy ${rec.day}` : null, rec.phong_so ? `Phòng ${rec.phong_so}` : null].filter(Boolean).join(' - ')}
+                                    </p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    Điểm danh lúc: <span className="font-medium text-foreground">{new Date(rec.checked_in_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                  </p>
                                 </div>
                                 {isEditing && (
                                   <div className="mt-2 flex flex-wrap gap-2 items-center">
