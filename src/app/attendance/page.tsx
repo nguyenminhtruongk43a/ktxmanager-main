@@ -7,6 +7,9 @@ interface SessionInfo {
   id: string;
   session_date: string;
   is_active: boolean;
+  zone_ktx: string;
+  zone_day: string;
+  zone_phong: string;
 }
 
 interface WorkerInfo {
@@ -20,6 +23,9 @@ type PageState = 'form' | 'submitting' | 'success' | 'error' | 'session_closed';
 
 export default function AttendancePage() {
   const [sessionDate, setSessionDate] = useState<string>('');
+  const [zoneKtx, setZoneKtx] = useState<string>('');
+  const [zoneDay, setZoneDay] = useState<string>('');
+  const [zonePhong, setZonePhong] = useState<string>('');
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
@@ -32,27 +38,34 @@ export default function AttendancePage() {
 
   const supabase = createClient();
 
-  // Parse query params — support both ?date=YYYY-MM-DD and legacy ?session=...&date=...
+  // Parse query params — support ?date=YYYY-MM-DD&ktx=...&day=...&phong=...
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const dateParam = params.get('date') || new Date().toISOString().slice(0, 10);
       setSessionDate(dateParam);
+      setZoneKtx(params.get('ktx') || '');
+      setZoneDay(params.get('day') || '');
+      setZonePhong(params.get('phong') || '');
     }
   }, []);
 
-  // Load active session by date (no expiry — valid all day until admin closes)
+  // Load active session by date + zone (no expiry — valid all day until admin closes)
   useEffect(() => {
     if (!sessionDate) return;
     const load = async () => {
       setSessionLoading(true);
       try {
-        const { data, error } = await supabase
+        let query = supabase
           .from('attendance_sessions')
-          .select('id, session_date, is_active')
+          .select('id, session_date, is_active, zone_ktx, zone_day, zone_phong')
           .eq('session_date', sessionDate)
-          .maybeSingle();
-        if (!error && data) setSession(data);
+          .eq('zone_ktx', zoneKtx)
+          .eq('zone_day', zoneDay)
+          .eq('zone_phong', zonePhong);
+
+        const { data, error } = await query.maybeSingle();
+        if (!error && data) setSession(data as SessionInfo);
         else setSession(null);
       } catch {
         setSession(null);
@@ -61,7 +74,7 @@ export default function AttendancePage() {
       }
     };
     load();
-  }, [sessionDate]);
+  }, [sessionDate, zoneKtx, zoneDay, zonePhong]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,6 +135,13 @@ export default function AttendancePage() {
     }
   };
 
+  // Zone label for display
+  const zoneLabel = [
+    zoneKtx,
+    zoneDay ? `Dãy ${zoneDay}` : '',
+    zonePhong ? `Phòng ${zonePhong}` : '',
+  ].filter(Boolean).join(' — ') || 'Toàn KTX';
+
   // ─── Loading ──────────────────────────────────────────────────────────────
   if (sessionLoading) {
     return (
@@ -143,7 +163,7 @@ export default function AttendancePage() {
             <AlertCircle size={32} className="text-amber-600" />
           </div>
           <h2 className="text-lg font-bold text-gray-900">Chưa có phiên điểm danh</h2>
-          <p className="text-sm text-gray-500">Phiên điểm danh ngày <strong>{sessionDate}</strong> chưa được mở. Vui lòng liên hệ ban quản lý.</p>
+          <p className="text-sm text-gray-500">Phiên điểm danh ngày <strong>{sessionDate}</strong> ({zoneLabel}) chưa được mở. Vui lòng liên hệ ban quản lý.</p>
         </div>
       </div>
     );
@@ -158,7 +178,7 @@ export default function AttendancePage() {
             <QrCode size={32} className="text-gray-400" />
           </div>
           <h2 className="text-lg font-bold text-gray-900">Phiên điểm danh đã đóng</h2>
-          <p className="text-sm text-gray-500">Phiên điểm danh ngày <strong>{session.session_date}</strong> đã kết thúc. Liên hệ ban quản lý nếu cần hỗ trợ.</p>
+          <p className="text-sm text-gray-500">Phiên điểm danh ngày <strong>{session.session_date}</strong> ({zoneLabel}) đã kết thúc. Liên hệ ban quản lý nếu cần hỗ trợ.</p>
         </div>
       </div>
     );
@@ -241,6 +261,9 @@ export default function AttendancePage() {
           </div>
           <h1 className="text-xl font-bold text-gray-900">Điểm Danh</h1>
           <p className="text-sm text-gray-500">Ngày <strong>{sessionDate}</strong></p>
+          {(zoneKtx || zoneDay || zonePhong) && (
+            <p className="text-xs text-emerald-700 font-medium bg-emerald-50 px-3 py-1 rounded-full inline-block">{zoneLabel}</p>
+          )}
           <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-semibold">
             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
             Phiên đang mở
@@ -249,48 +272,36 @@ export default function AttendancePage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Họ và tên <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={hoVaTen}
-                onChange={e => setHoVaTen(e.target.value)}
-                placeholder="Nhập họ và tên đầy đủ"
-                required
-                className="w-full pl-9 pr-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition-colors"
-              />
-            </div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Họ và tên</label>
+            <input
+              type="text"
+              value={hoVaTen}
+              onChange={e => setHoVaTen(e.target.value)}
+              placeholder="Nhập họ và tên đầy đủ"
+              required
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition-colors"
+            />
           </div>
-
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Mã nhân viên <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <Hash size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={maNv}
-                onChange={e => setMaNv(e.target.value)}
-                placeholder="Nhập mã nhân viên"
-                required
-                className="w-full pl-9 pr-4 py-3 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition-colors"
-              />
-            </div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Mã nhân viên</label>
+            <input
+              type="text"
+              value={maNv}
+              onChange={e => setMaNv(e.target.value)}
+              placeholder="Nhập mã nhân viên"
+              required
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 transition-colors"
+            />
           </div>
-
           <button
             type="submit"
             disabled={pageState === 'submitting' || !hoVaTen.trim() || !maNv.trim()}
-            className="w-full py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
+            className="w-full py-3.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
           >
             {pageState === 'submitting' ? (
-              <><Loader2 size={16} className="animate-spin" /> Đang xử lý...</>
+              <><Loader2 size={18} className="animate-spin" /> Đang xử lý...</>
             ) : (
-              <><CheckCircle2 size={16} /> Xác nhận điểm danh</>
+              <><CheckCircle2 size={18} /> Xác nhận điểm danh</>
             )}
           </button>
         </form>

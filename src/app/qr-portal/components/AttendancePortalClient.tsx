@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search, Trash2, Filter } from 'lucide-react';
+import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search, Trash2, Filter, MapPin } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '@/context/AuthContext';
 
@@ -11,6 +11,9 @@ interface AttendanceSession {
   opened_by: string | null;
   opened_at: string;
   is_active: boolean;
+  zone_ktx: string;
+  zone_day: string;
+  zone_phong: string;
 }
 
 interface AttendanceRecord {
@@ -42,7 +45,16 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   excused:  { label: 'Có phép',        color: 'bg-blue-100 text-blue-700 border-blue-200' },
 };
 
-function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string }) {
+function getZoneLabel(s: AttendanceSession): string {
+  if (!s.zone_ktx && !s.zone_day && !s.zone_phong) return 'Toàn KTX';
+  const parts: string[] = [];
+  if (s.zone_ktx) parts.push(s.zone_ktx);
+  if (s.zone_day) parts.push(`Dãy ${s.zone_day}`);
+  if (s.zone_phong) parts.push(`Phòng ${s.zone_phong}`);
+  return parts.join(' — ');
+}
+
+function QRCodeDisplay({ url, sessionDate, zoneLabel }: { url: string; sessionDate: string; zoneLabel: string }) {
   const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(url)}&margin=10&color=1a1a2e&bgcolor=ffffff`;
   const qrLargeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(url)}&margin=20&color=1a1a2e&bgcolor=ffffff`;
 
@@ -53,7 +65,7 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `qr-diemdanh-${sessionDate}.png`;
+      a.download = `qr-diemdanh-${sessionDate}-${zoneLabel.replace(/\s/g, '_')}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -68,7 +80,7 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
       <div className="flex flex-col sm:flex-row items-center gap-6">
         <div className="flex-shrink-0 flex flex-col items-center gap-3">
           <div className="bg-white rounded-2xl border-2 border-emerald-200 p-3 shadow-lg">
-            <img src={qrApiUrl} alt={`QR điểm danh ngày ${sessionDate}`} width={200} height={200} className="w-48 h-48 rounded-lg" />
+            <img src={qrApiUrl} alt={`QR điểm danh ngày ${sessionDate} - ${zoneLabel}`} width={200} height={200} className="w-48 h-48 rounded-lg" />
           </div>
           <button onClick={handleDownload}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors shadow-sm">
@@ -83,6 +95,7 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
             </div>
             <h3 className="font-bold text-foreground text-lg">QR Điểm Danh</h3>
             <p className="text-sm text-muted-foreground mt-1">Ngày: <strong>{sessionDate}</strong></p>
+            <p className="text-sm text-muted-foreground">Khu vực: <strong className="text-emerald-700">{zoneLabel}</strong></p>
           </div>
           <div className="bg-white/80 rounded-xl border border-border p-3 space-y-1.5">
             <p className="text-xs text-muted-foreground">Đường dẫn quét:</p>
@@ -99,15 +112,47 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
   );
 }
 
+// ─── Fetch ALL workers bypassing Supabase 1000-row default limit ─────────────
+async function fetchAllWorkers(supabase: ReturnType<typeof createClient>): Promise<WorkerInfo[]> {
+  const PAGE = 1000;
+  let all: WorkerInfo[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('workers')
+      .select('id, ho_va_ten, ma_nv, ktx, day, phong_so')
+      .order('ho_va_ten')
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
 export default function AttendancePortalClient() {
   const [activeTab, setActiveTab] = useState<'session' | 'records'>('session');
-  const [session, setSession] = useState<AttendanceSession | null>(null);
+
+  // Sessions for selected date (can be multiple — one per zone)
+  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
+  const [activeSession, setActiveSession] = useState<AttendanceSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [openingSession, setOpeningSession] = useState(false);
   const [closingSession, setClosingSession] = useState(false);
   const [deletingSession, setDeletingSession] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Zone selector for new session
+  const [zoneKtx, setZoneKtx] = useState('');
+  const [zoneDay, setZoneDay] = useState('');
+  const [zonePhong, setZonePhong] = useState('');
+
+  // Available KTX / Dãy / Phòng options from workers DB
+  const [ktxList, setKtxList] = useState<string[]>([]);
+  const [dayListByKtx, setDayListByKtx] = useState<Record<string, string[]>>({});
+  const [phongListByKtxDay, setPhongListByKtxDay] = useState<Record<string, string[]>>({});
 
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [allWorkers, setAllWorkers] = useState<WorkerInfo[]>([]);
@@ -118,6 +163,7 @@ export default function AttendancePortalClient() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'present' | 'absent' | 'excused'>('all');
   const [filterKtx, setFilterKtx] = useState<string>('all');
   const [filterDay, setFilterDay] = useState<string>('all');
+  const [filterPhong, setFilterPhong] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -136,73 +182,133 @@ export default function AttendancePortalClient() {
     }
   }, []);
 
-  // ─── Load session for selected date ──────────────────────────────────────
-  const fetchSession = useCallback(async (date: string, silent = false) => {
+  // ─── Load all workers once (for zone options + absent list) ──────────────
+  useEffect(() => {
+    const load = async () => {
+      const workers = await fetchAllWorkers(supabase);
+      setAllWorkers(workers);
+
+      // Build KTX list
+      const ktxSet = new Set<string>();
+      const dayMap: Record<string, Set<string>> = {};
+      const phongMap: Record<string, Set<string>> = {};
+
+      workers.forEach(w => {
+        if (w.ktx) {
+          ktxSet.add(w.ktx);
+          if (!dayMap[w.ktx]) dayMap[w.ktx] = new Set();
+          if (w.day) {
+            dayMap[w.ktx].add(w.day);
+            const key = `${w.ktx}__${w.day}`;
+            if (!phongMap[key]) phongMap[key] = new Set();
+            if (w.phong_so) phongMap[key].add(w.phong_so);
+          }
+        }
+      });
+
+      const sortedKtx = Array.from(ktxSet).sort();
+      setKtxList(sortedKtx);
+      const dayResult: Record<string, string[]> = {};
+      sortedKtx.forEach(k => { dayResult[k] = Array.from(dayMap[k] || []).sort(); });
+      setDayListByKtx(dayResult);
+      const phongResult: Record<string, string[]> = {};
+      Object.entries(phongMap).forEach(([k, v]) => { phongResult[k] = Array.from(v).sort(); });
+      setPhongListByKtxDay(phongResult);
+    };
+    load();
+  }, []);
+
+  // ─── Load sessions for selected date ─────────────────────────────────────
+  const fetchSessions = useCallback(async (date: string, silent = false) => {
     if (!silent) setSessionLoading(true);
     try {
       const { data, error } = await supabase
         .from('attendance_sessions')
         .select('*')
         .eq('session_date', date)
-        .maybeSingle();
-      if (!error) setSession(data);
+        .order('opened_at', { ascending: true });
+      if (!error) {
+        const list = (data || []) as AttendanceSession[];
+        setSessions(list);
+        // Keep activeSession in sync
+        setActiveSession(prev => {
+          if (!prev) return list.find(s => s.is_active) || list[0] || null;
+          const updated = list.find(s => s.id === prev.id);
+          return updated || list.find(s => s.is_active) || list[0] || null;
+        });
+      }
     } catch (e: any) {
-      console.error('fetchSession error:', e.message);
+      console.error('fetchSessions error:', e.message);
     } finally {
       setSessionLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchSession(selectedDate); }, [selectedDate, fetchSession]);
+  useEffect(() => { fetchSessions(selectedDate); }, [selectedDate, fetchSessions]);
 
-  // ─── Load attendance records + all workers ────────────────────────────────
-  const fetchRecordsAndWorkers = useCallback(async (silent = false) => {
-    if (!session) return;
+  // ─── Load attendance records for active session ───────────────────────────
+  const fetchRecords = useCallback(async (silent = false) => {
+    if (!activeSession) return;
     if (!silent) setRecordsLoading(true);
     else setRefreshing(true);
     try {
-      const [recRes, wkRes] = await Promise.all([
-        supabase.from('attendance_records').select('*').eq('session_id', session.id).order('checked_in_at', { ascending: false }),
-        supabase.from('workers').select('id, ho_va_ten, ma_nv, ktx, day, phong_so').order('ho_va_ten'),
-      ]);
-      if (!recRes.error) setRecords(recRes.data || []);
-      if (!wkRes.error) setAllWorkers(wkRes.data || []);
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .eq('session_id', activeSession.id)
+        .order('checked_in_at', { ascending: false });
+      if (!error) setRecords(data || []);
     } catch (e: any) {
       console.error('fetchRecords error:', e.message);
     } finally {
       setRecordsLoading(false);
       setRefreshing(false);
     }
-  }, [session?.id]);
+  }, [activeSession?.id]);
 
   useEffect(() => {
-    if (session) fetchRecordsAndWorkers();
-  }, [session?.id, fetchRecordsAndWorkers]);
+    if (activeSession) fetchRecords();
+  }, [activeSession?.id, fetchRecords]);
 
-  // ─── Auto-poll every 15s when session is active ───────────────────────────
+  // ─── Auto-poll every 15s when any session is active ──────────────────────
   useEffect(() => {
-    if (session?.is_active) {
+    const hasActive = sessions.some(s => s.is_active);
+    if (hasActive) {
       pollRef.current = setInterval(() => {
-        fetchSession(selectedDate, true);
-        fetchRecordsAndWorkers(true);
+        fetchSessions(selectedDate, true);
+        fetchRecords(true);
       }, 15000);
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [session?.is_active, selectedDate]);
+  }, [sessions, selectedDate]);
 
-  // ─── Derive unique KTX and Dãy options from records + workers ────────────
-  const ktxOptions = Array.from(new Set([
+  // ─── Derive filter options from records + workers ─────────────────────────
+  const filterKtxOptions = Array.from(new Set([
     ...records.map(r => r.ktx).filter(Boolean),
     ...allWorkers.map(w => w.ktx).filter(Boolean),
   ])).sort();
 
-  const dayOptions = Array.from(new Set([
+  const filterDayOptions = Array.from(new Set([
     ...records.filter(r => filterKtx === 'all' || r.ktx === filterKtx).map(r => r.day).filter(Boolean),
     ...allWorkers.filter(w => filterKtx === 'all' || w.ktx === filterKtx).map(w => w.day).filter(Boolean),
   ])).sort();
 
-  // Reset day filter when KTX changes
-  useEffect(() => { setFilterDay('all'); }, [filterKtx]);
+  const filterPhongOptions = Array.from(new Set([
+    ...records.filter(r => (filterKtx === 'all' || r.ktx === filterKtx) && (filterDay === 'all' || r.day === filterDay)).map(r => r.phong_so).filter(Boolean),
+    ...allWorkers.filter(w => (filterKtx === 'all' || w.ktx === filterKtx) && (filterDay === 'all' || w.day === filterDay)).map(w => w.phong_so).filter(Boolean),
+  ])).sort();
+
+  // Reset cascading filters
+  useEffect(() => { setFilterDay('all'); setFilterPhong('all'); }, [filterKtx]);
+  useEffect(() => { setFilterPhong('all'); }, [filterDay]);
+
+  // ─── Zone selector derived lists ─────────────────────────────────────────
+  const availableDays = zoneKtx ? (dayListByKtx[zoneKtx] || []) : [];
+  const availablePhongs = (zoneKtx && zoneDay) ? (phongListByKtxDay[`${zoneKtx}__${zoneDay}`] || []) : [];
+
+  // Reset cascading zone selectors
+  useEffect(() => { setZoneDay(''); setZonePhong(''); }, [zoneKtx]);
+  useEffect(() => { setZonePhong(''); }, [zoneDay]);
 
   // ─── Open session ─────────────────────────────────────────────────────────
   const handleOpenSession = async () => {
@@ -210,11 +316,23 @@ export default function AttendancePortalClient() {
     try {
       const { data, error } = await supabase
         .from('attendance_sessions')
-        .upsert({ session_date: selectedDate, opened_by: currentUser?.id ?? null, is_active: true, opened_at: new Date().toISOString() }, { onConflict: 'session_date' })
+        .upsert(
+          {
+            session_date: selectedDate,
+            opened_by: currentUser?.id ?? null,
+            is_active: true,
+            opened_at: new Date().toISOString(),
+            zone_ktx: zoneKtx,
+            zone_day: zoneDay,
+            zone_phong: zonePhong,
+          },
+          { onConflict: 'session_date,zone_ktx,zone_day,zone_phong' }
+        )
         .select()
         .single();
       if (!error && data) {
-        setSession(data);
+        await fetchSessions(selectedDate);
+        setActiveSession(data as AttendanceSession);
         setActiveTab('records');
       }
     } catch (e: any) {
@@ -226,14 +344,17 @@ export default function AttendancePortalClient() {
 
   // ─── Close session ────────────────────────────────────────────────────────
   const handleCloseSession = async () => {
-    if (!session) return;
+    if (!activeSession) return;
     setClosingSession(true);
     try {
       const { error } = await supabase
         .from('attendance_sessions')
         .update({ is_active: false })
-        .eq('id', session.id);
-      if (!error) setSession(prev => prev ? { ...prev, is_active: false } : prev);
+        .eq('id', activeSession.id);
+      if (!error) {
+        setActiveSession(prev => prev ? { ...prev, is_active: false } : prev);
+        await fetchSessions(selectedDate, true);
+      }
     } catch (e: any) {
       console.error('closeSession error:', e.message);
     } finally {
@@ -241,18 +362,17 @@ export default function AttendancePortalClient() {
     }
   };
 
-  // ─── Delete / Reset session (all records + session row) ──────────────────
+  // ─── Delete / Reset session ───────────────────────────────────────────────
   const handleDeleteSession = async () => {
-    if (!session) return;
+    if (!activeSession) return;
     setDeletingSession(true);
     try {
-      // Delete all records first (cascade should handle it, but explicit is safer)
-      await supabase.from('attendance_records').delete().eq('session_id', session.id);
-      const { error } = await supabase.from('attendance_sessions').delete().eq('id', session.id);
+      await supabase.from('attendance_records').delete().eq('session_id', activeSession.id);
+      const { error } = await supabase.from('attendance_sessions').delete().eq('id', activeSession.id);
       if (!error) {
-        setSession(null);
         setRecords([]);
         setShowDeleteConfirm(false);
+        await fetchSessions(selectedDate);
         setActiveTab('session');
       }
     } catch (e: any) {
@@ -287,15 +407,25 @@ export default function AttendancePortalClient() {
     }
   };
 
-  // ─── Compute absent workers ───────────────────────────────────────────────
+  // ─── Compute absent workers (scoped to active session zone) ──────────────
   const checkedInMaNvSet = new Set(records.map(r => r.ma_nv));
-  const absentWorkers: WorkerInfo[] = allWorkers.filter(w => w.ma_nv && !checkedInMaNvSet.has(w.ma_nv));
+  const zoneWorkers: WorkerInfo[] = activeSession
+    ? allWorkers.filter(w => {
+        if (activeSession.zone_ktx && w.ktx !== activeSession.zone_ktx) return false;
+        if (activeSession.zone_day && w.day !== activeSession.zone_day) return false;
+        if (activeSession.zone_phong && w.phong_so !== activeSession.zone_phong) return false;
+        return true;
+      })
+    : allWorkers;
 
-  // ─── Filtered records (status + KTX + Dãy + search) ──────────────────────
+  const absentWorkers: WorkerInfo[] = zoneWorkers.filter(w => w.ma_nv && !checkedInMaNvSet.has(w.ma_nv));
+
+  // ─── Filtered records ─────────────────────────────────────────────────────
   const filteredRecords = records.filter(r => {
     if (filterStatus !== 'all' && r.status !== filterStatus) return false;
     if (filterKtx !== 'all' && r.ktx !== filterKtx) return false;
     if (filterDay !== 'all' && r.day !== filterDay) return false;
+    if (filterPhong !== 'all' && r.phong_so !== filterPhong) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return r.ho_va_ten.toLowerCase().includes(q) || r.ma_nv.toLowerCase().includes(q);
@@ -306,6 +436,7 @@ export default function AttendancePortalClient() {
   const filteredAbsent = absentWorkers.filter(w => {
     if (filterKtx !== 'all' && w.ktx !== filterKtx) return false;
     if (filterDay !== 'all' && w.day !== filterDay) return false;
+    if (filterPhong !== 'all' && w.phong_so !== filterPhong) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return w.ho_va_ten.toLowerCase().includes(q) || (w.ma_nv || '').toLowerCase().includes(q);
@@ -334,7 +465,18 @@ export default function AttendancePortalClient() {
   const presentCount = records.filter(r => r.status === 'present').length;
   const excusedCount = records.filter(r => r.status === 'excused').length;
   const absentCount = absentWorkers.length;
-  const totalWorkers = allWorkers.length;
+  const totalZoneWorkers = zoneWorkers.length;
+  const activeSessionZoneLabel = activeSession ? getZoneLabel(activeSession) : '';
+
+  // Build QR URL for active session
+  const buildQrUrl = (s: AttendanceSession) => {
+    if (!attendanceUrl) return '';
+    const params = new URLSearchParams({ date: s.session_date });
+    if (s.zone_ktx) params.set('ktx', s.zone_ktx);
+    if (s.zone_day) params.set('day', s.zone_day);
+    if (s.zone_phong) params.set('phong', s.zone_phong);
+    return `${attendanceUrl}?${params.toString()}`;
+  };
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -342,10 +484,10 @@ export default function AttendancePortalClient() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">QR Điểm Danh & Kiểm Soát Quân Số</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Quản lý điểm danh hàng ngày qua mã QR</p>
+          <p className="text-sm text-muted-foreground mt-0.5">Quản lý điểm danh hàng ngày qua mã QR — tổng {allWorkers.length.toLocaleString('vi-VN')} công nhân</p>
         </div>
-        {session && (
-          <button onClick={() => { fetchSession(selectedDate, true); fetchRecordsAndWorkers(true); }} disabled={refreshing}
+        {activeSession && (
+          <button onClick={() => { fetchSessions(selectedDate, true); fetchRecords(true); }} disabled={refreshing}
             className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors disabled:opacity-60">
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
             Làm mới
@@ -369,9 +511,11 @@ export default function AttendancePortalClient() {
       {/* ─── TAB: Session Management ─── */}
       {activeTab === 'session' && (
         <div className="space-y-5">
-          {/* Date picker + open/close/delete */}
+          {/* Date picker + zone selector + open/close/delete */}
           <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
-            <h2 className="font-semibold text-foreground flex items-center gap-2"><Calendar size={18} className="text-primary" /> Chọn ngày điểm danh</h2>
+            <h2 className="font-semibold text-foreground flex items-center gap-2"><Calendar size={18} className="text-primary" /> Chọn ngày & khu vực điểm danh</h2>
+
+            {/* Date */}
             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end flex-wrap">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Ngày điểm danh</label>
@@ -382,16 +526,60 @@ export default function AttendancePortalClient() {
                   className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                 />
               </div>
+            </div>
+
+            {/* Zone selector */}
+            <div className="bg-muted/50 border border-border rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <MapPin size={15} className="text-primary" /> Khu vực QR (để trống = Toàn KTX)
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {/* KTX */}
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Khu KTX</label>
+                  <select value={zoneKtx} onChange={e => setZoneKtx(e.target.value)}
+                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
+                    <option value="">Toàn KTX</option>
+                    {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </div>
+                {/* Dãy */}
+                {zoneKtx && (
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Dãy nhà</label>
+                    <select value={zoneDay} onChange={e => setZoneDay(e.target.value)}
+                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
+                      <option value="">Toàn dãy</option>
+                      {availableDays.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                    </select>
+                  </div>
+                )}
+                {/* Phòng */}
+                {zoneKtx && zoneDay && (
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Phòng cụ thể</label>
+                    <select value={zonePhong} onChange={e => setZonePhong(e.target.value)}
+                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
+                      <option value="">Toàn phòng</option>
+                      {availablePhongs.map(p => <option key={p} value={p}>Phòng {p}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+              {/* Zone preview */}
+              <div className="text-xs text-muted-foreground">
+                Phạm vi QR: <strong className="text-foreground">
+                  {[zoneKtx || 'Toàn KTX', zoneDay ? `Dãy ${zoneDay}` : '', zonePhong ? `Phòng ${zonePhong}` : ''].filter(Boolean).join(' — ')}
+                </strong>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex flex-wrap gap-3 items-center">
               {sessionLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 size={16} className="animate-spin" /> Đang kiểm tra...
                 </div>
-              ) : session?.is_active ? (
-                <button onClick={handleCloseSession} disabled={closingSession}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-60 transition-colors">
-                  {closingSession ? <Loader2 size={15} className="animate-spin" /> : <Square size={15} />}
-                  Đóng phiên điểm danh
-                </button>
               ) : (
                 <button onClick={handleOpenSession} disabled={openingSession || !selectedDate}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition-colors">
@@ -399,45 +587,67 @@ export default function AttendancePortalClient() {
                   Mở phiên điểm danh
                 </button>
               )}
-              {/* Delete / Reset button */}
-              {session && (
-                <button onClick={() => setShowDeleteConfirm(true)}
-                  className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors">
-                  <Trash2 size={15} />
-                  Xóa / Reset phiên
-                </button>
-              )}
             </div>
-
-            {/* Session status */}
-            {!sessionLoading && session && (
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border ${session.is_active ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-muted border-border text-muted-foreground'}`}>
-                {session.is_active
-                  ? <><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" /> Phiên đang mở — Công nhân có thể quét QR bất cứ lúc nào trong ngày</>
-                  : <><div className="w-2 h-2 bg-gray-400 rounded-full" /> Phiên đã đóng — Không nhận điểm danh mới</>
-                }
-              </div>
-            )}
-            {!sessionLoading && !session && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border bg-amber-50 border-amber-200 text-amber-800">
-                <AlertCircle size={14} /> Chưa có phiên điểm danh cho ngày này. Bấm &quot;Mở phiên điểm danh&quot; để bắt đầu.
-              </div>
-            )}
           </div>
 
-          {/* QR Code display — URL uses only date, no session ID */}
-          {session?.is_active && attendanceUrl && (
-            <QRCodeDisplay url={`${attendanceUrl}?date=${selectedDate}`} sessionDate={selectedDate} />
+          {/* Sessions list for selected date */}
+          {!sessionLoading && sessions.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <QrCode size={15} className="text-primary" />
+                Phiên điểm danh ngày {selectedDate} ({sessions.length} phiên)
+              </h3>
+              {sessions.map(s => (
+                <div key={s.id} className={`bg-card border rounded-2xl p-4 space-y-3 cursor-pointer transition-all ${activeSession?.id === s.id ? 'border-primary ring-2 ring-primary/20' : 'border-border hover:border-primary/50'}`}
+                  onClick={() => setActiveSession(s)}>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <MapPin size={15} className="text-primary flex-shrink-0" />
+                      <span className="font-semibold text-foreground text-sm">{getZoneLabel(s)}</span>
+                      {activeSession?.id === s.id && <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">Đang xem</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${s.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${s.is_active ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
+                        {s.is_active ? 'Đang mở' : 'Đã đóng'}
+                      </span>
+                      {s.is_active ? (
+                        <button onClick={e => { e.stopPropagation(); setActiveSession(s); handleCloseSession(); }} disabled={closingSession}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-60 transition-colors">
+                          {closingSession && activeSession?.id === s.id ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}
+                          Đóng phiên
+                        </button>
+                      ) : null}
+                      <button onClick={e => { e.stopPropagation(); setActiveSession(s); setShowDeleteConfirm(true); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-red-300 text-red-600 rounded-lg text-xs font-medium hover:bg-red-50 transition-colors">
+                        <Trash2 size={12} /> Xóa
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* QR code for this session */}
+                  {s.is_active && attendanceUrl && (
+                    <QRCodeDisplay url={buildQrUrl(s)} sessionDate={s.session_date} zoneLabel={getZoneLabel(s)} />
+                  )}
+                </div>
+              ))}
+            </div>
           )}
 
-          {/* Quick stats */}
-          {session && (
+          {!sessionLoading && sessions.length === 0 && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border bg-amber-50 border-amber-200 text-amber-800">
+              <AlertCircle size={14} /> Chưa có phiên điểm danh cho ngày này. Chọn khu vực và bấm &quot;Mở phiên điểm danh&quot; để bắt đầu.
+            </div>
+          )}
+
+          {/* Quick stats for active session */}
+          {activeSession && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { label: 'Tổng công nhân', value: totalWorkers, color: 'text-foreground bg-card border-border', icon: <Users size={18} /> },
+                { label: `Tổng (${activeSessionZoneLabel})`, value: totalZoneWorkers.toLocaleString('vi-VN'), color: 'text-foreground bg-card border-border', icon: <Users size={18} /> },
                 { label: 'Đã điểm danh', value: presentCount + excusedCount, color: 'text-emerald-700 bg-emerald-50 border-emerald-200', icon: <UserCheck size={18} /> },
                 { label: 'Vắng mặt', value: absentCount, color: 'text-red-700 bg-red-50 border-red-200', icon: <UserX size={18} /> },
-                { label: 'Tỷ lệ có mặt', value: totalWorkers > 0 ? `${Math.round(((presentCount + excusedCount) / totalWorkers) * 100)}%` : '—', color: 'text-blue-700 bg-blue-50 border-blue-200', icon: <CheckCircle2 size={18} /> },
+                { label: 'Tỷ lệ có mặt', value: totalZoneWorkers > 0 ? `${Math.round(((presentCount + excusedCount) / totalZoneWorkers) * 100)}%` : '—', color: 'text-blue-700 bg-blue-50 border-blue-200', icon: <CheckCircle2 size={18} /> },
               ].map(s => (
                 <div key={s.label} className={`p-4 rounded-xl border flex items-center gap-3 ${s.color}`}>
                   <div className="opacity-70">{s.icon}</div>
@@ -455,7 +665,21 @@ export default function AttendancePortalClient() {
       {/* ─── TAB: Records ─── */}
       {activeTab === 'records' && (
         <div className="space-y-4">
-          {!session ? (
+          {/* Session selector when multiple sessions exist */}
+          {sessions.length > 1 && (
+            <div className="bg-card border border-border rounded-xl p-3 flex flex-wrap gap-2 items-center">
+              <span className="text-xs text-muted-foreground font-medium">Xem phiên:</span>
+              {sessions.map(s => (
+                <button key={s.id} onClick={() => setActiveSession(s)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${activeSession?.id === s.id ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'}`}>
+                  <MapPin size={11} /> {getZoneLabel(s)}
+                  {s.is_active && <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!activeSession ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
               <QrCode size={40} className="mb-3 opacity-30" />
               <p className="text-sm">Chưa có phiên điểm danh. Chuyển sang tab &quot;Mở phiên điểm danh&quot; để bắt đầu.</p>
@@ -465,7 +689,7 @@ export default function AttendancePortalClient() {
               {/* Stats row */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { label: 'Tổng công nhân', value: totalWorkers, color: 'text-foreground bg-card border-border' },
+                  { label: `Tổng (${activeSessionZoneLabel})`, value: totalZoneWorkers.toLocaleString('vi-VN'), color: 'text-foreground bg-card border-border' },
                   { label: 'Đã điểm danh', value: presentCount + excusedCount, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
                   { label: 'Vắng mặt', value: absentCount, color: 'text-red-700 bg-red-50 border-red-200' },
                   { label: 'Có phép', value: excusedCount, color: 'text-blue-700 bg-blue-50 border-blue-200' },
@@ -499,20 +723,29 @@ export default function AttendancePortalClient() {
                   </div>
 
                   {/* KTX filter */}
-                  {ktxOptions.length > 0 && (
+                  {filterKtxOptions.length > 0 && (
                     <select value={filterKtx} onChange={e => setFilterKtx(e.target.value)}
                       className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
                       <option value="all">Tất cả KTX</option>
-                      {ktxOptions.map(k => <option key={k} value={k}>{k}</option>)}
+                      {filterKtxOptions.map(k => <option key={k} value={k}>{k}</option>)}
                     </select>
                   )}
 
                   {/* Dãy filter */}
-                  {dayOptions.length > 0 && (
+                  {filterDayOptions.length > 0 && (
                     <select value={filterDay} onChange={e => setFilterDay(e.target.value)}
                       className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
                       <option value="all">Tất cả Dãy</option>
-                      {dayOptions.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                      {filterDayOptions.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                    </select>
+                  )}
+
+                  {/* Phòng filter */}
+                  {filterPhongOptions.length > 0 && (
+                    <select value={filterPhong} onChange={e => setFilterPhong(e.target.value)}
+                      className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      <option value="all">Tất cả Phòng</option>
+                      {filterPhongOptions.map(p => <option key={p} value={p}>Phòng {p}</option>)}
                     </select>
                   )}
 
@@ -667,7 +900,7 @@ export default function AttendancePortalClient() {
               </div>
               <div>
                 <h3 className="font-bold text-foreground">Xóa / Reset phiên điểm danh?</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Ngày {selectedDate}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Ngày {selectedDate} — {activeSession ? getZoneLabel(activeSession) : ''}</p>
               </div>
             </div>
             <p className="text-sm text-muted-foreground">Toàn bộ dữ liệu điểm danh của phiên này sẽ bị xóa vĩnh viễn. Hành động này không thể hoàn tác.</p>
