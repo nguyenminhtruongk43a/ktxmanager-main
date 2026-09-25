@@ -137,13 +137,12 @@ function resolveColumnField(rawHeader: string): DbField | 'stt' | null {
   return null;
 }
 
-function resolveKtxFromSheetName(sheetName: string): 'KTX 1' | 'KTX 2' | null {
+function resolveKtxFromSheetName(sheetName: string): string | null {
   const loose = normalizeLoose(sheetName).replace(/\s+/g, '');
-  if (/ktx.*1|1.*ktx|ktxtucxa1|kytuxa1|ktx1/.test(loose)) return 'KTX 1';
-  if (/ktx.*2|2.*ktx|ktxtucxa2|kytuxa2|ktx2/.test(loose)) return 'KTX 2';
-  const norm = normalizeHeader(sheetName);
-  if (/\b1\b/.test(norm) || norm.endsWith('1') || norm.endsWith(' 1')) return 'KTX 1';
-  if (/\b2\b/.test(norm) || norm.endsWith('2') || norm.endsWith(' 2')) return 'KTX 2';
+  const match = loose.match(/ktx\s*(\d+)/);
+  if (match) return `KTX ${match[1]}`;
+  const numMatch = loose.match(/(\d+)/);
+  if (numMatch) return `KTX ${numMatch[1]}`;
   return null;
 }
 
@@ -206,20 +205,19 @@ function parseSheetToRows(sheet: XLSX.WorkSheet, ktxName: string): Omit<Facility
   return results;
 }
 
-function resolveSheets(workbook: XLSX.WorkBook): { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] {
+function resolveSheets(workbook: XLSX.WorkBook): { sheetName: string; ktxName: string }[] {
   const sheets = workbook.SheetNames;
   if (sheets.length === 1) {
     const ktx = resolveKtxFromSheetName(sheets[0]) ?? 'KTX 1';
     return [{ sheetName: sheets[0], ktxName: ktx }];
   }
-  const result: { sheetName: string; ktxName: 'KTX 1' | 'KTX 2' }[] = [];
+  const result: { sheetName: string; ktxName: string }[] = [];
   for (const sheetName of sheets) {
     const ktx = resolveKtxFromSheetName(sheetName);
     if (ktx) result.push({ sheetName, ktxName: ktx });
   }
   if (result.length === 0 && sheets.length >= 2) {
-    result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
-    result.push({ sheetName: sheets[1], ktxName: 'KTX 2' });
+    sheets.forEach((s, i) => result.push({ sheetName: s, ktxName: `KTX ${i + 1}` }));
   } else if (result.length === 0 && sheets.length === 1) {
     result.push({ sheetName: sheets[0], ktxName: 'KTX 1' });
   }
@@ -266,8 +264,9 @@ function DeleteConfirmModal({ row, onConfirm, onCancel, deleting }: {
 }
 
 // ─── Add Room Modal ───────────────────────────────────────────────────────────
-function AddRoomModal({ activeKtx, onSave, onClose, saving }: {
+function AddRoomModal({ activeKtx, ktxOptions, onSave, onClose, saving }: {
   activeKtx: string;
+  ktxOptions: string[];
   onSave: (row: Omit<FacilityRow, 'id'>) => void;
   onClose: () => void;
   saving: boolean;
@@ -276,18 +275,47 @@ function AddRoomModal({ activeKtx, onSave, onClose, saving }: {
     ktx: activeKtx, day: '', phong_khu_vuc: '', giuong: 0, dieu_hoa: 0, tu: 0,
     quat: 0, o_cam_dien: 0, remote: 0, bong_tuyp: 0, ban_an: 0, ghe_an: 0, ghi_chu: ''
   });
-  const canSave = form.day.trim() && form.phong_khu_vuc.trim();
+  const [newKtxInput, setNewKtxInput] = useState('');
+  const canSave = form.day.trim() && form.phong_khu_vuc.trim() && form.ktx.trim();
+
+  const allKtxChoices = Array.from(new Set([...ktxOptions, 'KTX 1', 'KTX 2', 'KTX 3', 'KTX 4', 'KTX 5'])).sort();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-foreground">Thêm phòng/khu vực mới — {activeKtx}</h3>
+          <h3 className="font-semibold text-foreground">Thêm phòng/khu vực mới</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground">
             <X size={18} />
           </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {/* KTX selector — required field */}
+          <div className="col-span-2 sm:col-span-3">
+            <label className="text-xs text-muted-foreground mb-1 block font-medium">Khu KTX *</label>
+            <div className="flex gap-2">
+              <select
+                value={form.ktx}
+                onChange={e => setForm(r => ({ ...r, ktx: e.target.value }))}
+                className="flex-1 px-2 py-1.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {allKtxChoices.map(k => <option key={k} value={k}>{k}</option>)}
+                <option value="__new__">+ Nhập KTX khác...</option>
+              </select>
+              {form.ktx === '__new__' && (
+                <input
+                  type="text"
+                  placeholder="VD: KTX 6"
+                  value={newKtxInput}
+                  onChange={e => { setNewKtxInput(e.target.value); setForm(r => ({ ...r, ktx: e.target.value })); }}
+                  className="w-32 px-2 py-1.5 text-sm border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              )}
+            </div>
+            {form.ktx && form.ktx !== '__new__' && (
+              <p className="text-xs text-primary mt-1">Phòng sẽ được thêm vào: <strong>{form.ktx}</strong></p>
+            )}
+          </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Dãy *</label>
             <input type="text" value={form.day} onChange={e => setForm(r => ({ ...r, day: e.target.value }))}
@@ -330,12 +358,11 @@ function AddRoomModal({ activeKtx, onSave, onClose, saving }: {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function FacilitiesClient() {
-  const [activeKtx, setActiveKtx] = useState<'KTX 1' | 'KTX 2'>('KTX 1');
   const [rows, setRows] = useState<FacilityRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeKtx, setActiveKtx] = useState<string>('');
 
   // Filters
-  const [filterKtx, setFilterKtx] = useState<string>('');
   const [filterDay, setFilterDay] = useState<string>('');
   const [searchPhong, setSearchPhong] = useState('');
 
@@ -371,7 +398,15 @@ export default function FacilitiesClient() {
         .order('day', { ascending: true })
         .order('phong_khu_vuc', { ascending: true });
       if (error) console.error('Fetch facilities error:', error.message);
-      else setRows(data || []);
+      else {
+        const fetched = data || [];
+        setRows(fetched);
+        // Auto-set activeKtx to first available KTX from DB
+        if (fetched.length > 0 && !activeKtx) {
+          const firstKtx = Array.from(new Set(fetched.map((r: FacilityRow) => r.ktx).filter(Boolean))).sort()[0];
+          if (firstKtx) setActiveKtx(firstKtx as string);
+        }
+      }
     } catch (e: any) {
       console.error('Fetch error:', e.message);
     } finally {
@@ -381,15 +416,26 @@ export default function FacilitiesClient() {
 
   useEffect(() => { fetchFacilities(); }, [fetchFacilities]);
 
-  // ─── Derived filter options ───────────────────────────────────────────────
-  const allKtxOptions = Array.from(new Set(rows.map(r => r.ktx).filter(Boolean))).sort();
+  // ─── Derived KTX tabs from actual DB data ────────────────────────────────
+  const allKtxTabs = Array.from(new Set(rows.map(r => r.ktx).filter(Boolean))).sort();
+
+  // If activeKtx not in tabs (e.g. after data load), reset to first
+  useEffect(() => {
+    if (allKtxTabs.length > 0 && !allKtxTabs.includes(activeKtx)) {
+      setActiveKtx(allKtxTabs[0]);
+      setFilterDay('');
+      setSearchPhong('');
+    }
+  }, [allKtxTabs.join(',')]);
+
+  // ─── Derived filter options scoped to active KTX tab ─────────────────────
   const allDayOptions = Array.from(new Set(
-    rows.filter(r => !filterKtx || r.ktx === filterKtx).map(r => r.day).filter(Boolean)
+    rows.filter(r => r.ktx === activeKtx).map(r => r.day).filter(Boolean)
   )).sort();
 
-  // ─── Filtered rows ────────────────────────────────────────────────────────
+  // ─── Filtered rows — always scoped to activeKtx tab ──────────────────────
   const filteredRows = rows.filter(r => {
-    if (filterKtx && r.ktx !== filterKtx) return false;
+    if (r.ktx !== activeKtx) return false;
     if (filterDay && r.day !== filterDay) return false;
     if (searchPhong.trim()) {
       const q = searchPhong.toLowerCase();
@@ -493,8 +539,6 @@ export default function FacilitiesClient() {
       'Ghế ăn': r.ghe_an,
       'Ghi chú': r.ghi_chu || '',
     }));
-
-    // Add totals row
     exportData.push({
       'KTX': 'TỔNG CỘNG',
       'Dãy': '',
@@ -510,11 +554,10 @@ export default function FacilitiesClient() {
       'Ghế ăn': totals['ghe_an'] || 0,
       'Ghi chú': '',
     });
-
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Cơ sở vật chất');
-    const filterLabel = filterKtx ? `_${filterKtx.replace(' ', '')}` : '';
+    const filterLabel = activeKtx ? `_${activeKtx.replace(' ', '')}` : '';
     XLSX.writeFile(wb, `CSVC_KTX_HocMon${filterLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -522,10 +565,14 @@ export default function FacilitiesClient() {
   const handleAddRow = async (newRow: Omit<FacilityRow, 'id'>) => {
     setAddingRow(true);
     try {
-      const { data, error } = await supabase.from('facilities').insert({ ...newRow, ktx: activeKtx }).select().single();
+      const { data, error } = await supabase.from('facilities').insert(newRow).select().single();
       if (error) console.error('Add row error:', error.message);
       else if (data) {
         setRows(prev => [...prev, data]);
+        // Switch to the KTX tab of the newly added room
+        setActiveKtx(newRow.ktx);
+        setFilterDay('');
+        setSearchPhong('');
         setShowAddModal(false);
       }
     } catch (e: any) {
@@ -597,7 +644,7 @@ export default function FacilitiesClient() {
   const tdClass = "px-3 py-2 text-sm text-foreground whitespace-nowrap";
   const inputClass = "w-16 px-1.5 py-0.5 text-sm border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary text-center";
 
-  const hasActiveFilters = filterKtx || filterDay || searchPhong.trim();
+  const hasActiveFilters = filterDay || searchPhong.trim();
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -605,6 +652,7 @@ export default function FacilitiesClient() {
       {showAddModal && (
         <AddRoomModal
           activeKtx={activeKtx}
+          ktxOptions={allKtxTabs}
           onSave={handleAddRow}
           onClose={() => setShowAddModal(false)}
           saving={addingRow}
@@ -665,33 +713,31 @@ export default function FacilitiesClient() {
         </div>
       )}
 
-      {/* KTX Sub-tabs */}
-      <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
-        {(['KTX 1', 'KTX 2'] as const).map(ktx => (
-          <button
-            key={ktx}
-            onClick={() => { setActiveKtx(ktx); setEditingId(null); setEditingRow(null); setFilterKtx(ktx); setFilterDay(''); setSearchPhong(''); }}
-            className={`px-5 py-2 rounded-md text-sm font-semibold transition-all ${activeKtx === ktx ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            {ktx}
-          </button>
-        ))}
-      </div>
+      {/* Dynamic KTX Sub-tabs — auto-generated from DB */}
+      {loading ? (
+        <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
+          {[1, 2].map(i => <div key={i} className="w-20 h-8 bg-muted-foreground/20 rounded-md animate-pulse" />)}
+        </div>
+      ) : allKtxTabs.length > 0 ? (
+        <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit flex-wrap">
+          {allKtxTabs.map(ktx => (
+            <button
+              key={ktx}
+              onClick={() => { setActiveKtx(ktx); setEditingId(null); setEditingRow(null); setFilterDay(''); setSearchPhong(''); }}
+              className={`px-5 py-2 rounded-md text-sm font-semibold transition-all ${activeKtx === ktx ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {ktx}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      {/* Global Filters */}
+      {/* Filters scoped to active KTX tab */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Filter size={13} />
           <span className="font-medium">Bộ lọc:</span>
         </div>
-        <select
-          value={filterKtx}
-          onChange={e => { setFilterKtx(e.target.value); setFilterDay(''); if (e.target.value) setActiveKtx(e.target.value as 'KTX 1' | 'KTX 2'); }}
-          className="px-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-        >
-          <option value="">Tất cả KTX</option>
-          {allKtxOptions.map(k => <option key={k} value={k}>{k}</option>)}
-        </select>
         <select
           value={filterDay}
           onChange={e => setFilterDay(e.target.value)}
@@ -712,7 +758,7 @@ export default function FacilitiesClient() {
         </div>
         {hasActiveFilters && (
           <button
-            onClick={() => { setFilterKtx(''); setFilterDay(''); setSearchPhong(''); }}
+            onClick={() => { setFilterDay(''); setSearchPhong(''); }}
             className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors"
           >
             <X size={12} /> Xóa lọc
@@ -746,7 +792,7 @@ export default function FacilitiesClient() {
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
           <span className="text-sm font-semibold text-foreground">
-            {filterKtx || activeKtx} — {sortedRows.length} phòng/khu vực
+            {activeKtx} — {sortedRows.length} phòng/khu vực
             {hasActiveFilters && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">đang lọc</span>}
           </span>
           {saveError && <span className="text-xs text-red-500">{saveError}</span>}
@@ -757,7 +803,7 @@ export default function FacilitiesClient() {
         ) : sortedRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <Package size={40} className="mb-3 opacity-30" />
-            <p className="text-sm">{hasActiveFilters ? 'Không tìm thấy kết quả phù hợp' : 'Chưa có dữ liệu cơ sở vật chất'}</p>
+            <p className="text-sm">{hasActiveFilters ? 'Không tìm thấy kết quả phù hợp' : `Chưa có dữ liệu cho ${activeKtx}`}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -862,7 +908,7 @@ export default function FacilitiesClient() {
 
       {/* Import Help */}
       <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
-        <span className="font-medium">Hướng dẫn Import Excel:</span> Hỗ trợ file <code className="bg-muted px-1 rounded">.xlsx</code> có 1 hoặc nhiều sheet với tên bất kỳ (KTX 1, KTX 2, KTX1, KTX2...). Hàng tiêu đề tự động nhận dạng qua từ khóa <strong>STT</strong>. Các cột nhận dạng tự động: <em>Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm điện, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
+        <span className="font-medium">Hướng dẫn Import Excel:</span> Hỗ trợ file <code className="bg-muted px-1 rounded">.xlsx</code> có 1 hoặc nhiều sheet với tên bất kỳ (KTX 1, KTX 2, KTX 3...). Hàng tiêu đề tự động nhận dạng qua từ khóa <strong>STT</strong>. Các cột nhận dạng tự động: <em>Dãy, Phòng/Khu vực, Giường, Điều hòa, Tủ, Quạt, Ổ cắm điện, Remote, Bóng tuýp, Bàn ăn, Ghế ăn</em>.
       </div>
     </div>
   );

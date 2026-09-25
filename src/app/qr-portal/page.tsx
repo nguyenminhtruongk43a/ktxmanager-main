@@ -1,6 +1,6 @@
 import React, { Suspense } from 'react';
 import AppLayout from '@/components/AppLayout';
-import QRPortalClient from './components/QRPortalClient';
+import QRPortalTabsWrapper from './components/QRPortalTabsWrapper';
 
 export default function QRPortalPage() {
   return (
@@ -10,7 +10,7 @@ export default function QRPortalPage() {
           <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         </div>
       }>
-        <QRPortalClient />
+        <QRPortalTabsWrapper />
       </Suspense>
     </AppLayout>
   );
