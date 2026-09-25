@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search } from 'lucide-react';
+import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search, Trash2, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '@/context/AuthContext';
 
@@ -79,7 +79,7 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
           <div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-semibold mb-2">
               <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              Phiên đang mở
+              Phiên đang mở — Hợp lệ cả ngày
             </div>
             <h3 className="font-bold text-foreground text-lg">QR Điểm Danh</h3>
             <p className="text-sm text-muted-foreground mt-1">Ngày: <strong>{sessionDate}</strong></p>
@@ -89,7 +89,7 @@ function QRCodeDisplay({ url, sessionDate }: { url: string; sessionDate: string 
             <code className="text-xs bg-muted px-2 py-1 rounded font-mono text-foreground break-all block">{url}</code>
           </div>
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1 bg-white text-emerald-700 px-2 py-1 rounded-full border border-emerald-200">✓ Chống quét trùng</span>
+            <span className="flex items-center gap-1 bg-white text-emerald-700 px-2 py-1 rounded-full border border-emerald-200">✓ Không hết hạn trong ngày</span>
             <span className="flex items-center gap-1 bg-white text-blue-700 px-2 py-1 rounded-full border border-blue-200">✓ Xác nhận tức thì</span>
             <span className="flex items-center gap-1 bg-white text-purple-700 px-2 py-1 rounded-full border border-purple-200">✓ Hiển thị phòng/dãy</span>
           </div>
@@ -106,14 +106,20 @@ export default function AttendancePortalClient() {
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [openingSession, setOpeningSession] = useState(false);
   const [closingSession, setClosingSession] = useState(false);
+  const [deletingSession, setDeletingSession] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [allWorkers, setAllWorkers] = useState<WorkerInfo[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Filters
   const [filterStatus, setFilterStatus] = useState<'all' | 'present' | 'absent' | 'excused'>('all');
+  const [filterKtx, setFilterKtx] = useState<string>('all');
+  const [filterDay, setFilterDay] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editStatus, setEditStatus] = useState('');
   const [editNote, setEditNote] = useState('');
@@ -184,6 +190,20 @@ export default function AttendancePortalClient() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [session?.is_active, selectedDate]);
 
+  // ─── Derive unique KTX and Dãy options from records + workers ────────────
+  const ktxOptions = Array.from(new Set([
+    ...records.map(r => r.ktx).filter(Boolean),
+    ...allWorkers.map(w => w.ktx).filter(Boolean),
+  ])).sort();
+
+  const dayOptions = Array.from(new Set([
+    ...records.filter(r => filterKtx === 'all' || r.ktx === filterKtx).map(r => r.day).filter(Boolean),
+    ...allWorkers.filter(w => filterKtx === 'all' || w.ktx === filterKtx).map(w => w.day).filter(Boolean),
+  ])).sort();
+
+  // Reset day filter when KTX changes
+  useEffect(() => { setFilterDay('all'); }, [filterKtx]);
+
   // ─── Open session ─────────────────────────────────────────────────────────
   const handleOpenSession = async () => {
     setOpeningSession(true);
@@ -221,6 +241,27 @@ export default function AttendancePortalClient() {
     }
   };
 
+  // ─── Delete / Reset session (all records + session row) ──────────────────
+  const handleDeleteSession = async () => {
+    if (!session) return;
+    setDeletingSession(true);
+    try {
+      // Delete all records first (cascade should handle it, but explicit is safer)
+      await supabase.from('attendance_records').delete().eq('session_id', session.id);
+      const { error } = await supabase.from('attendance_sessions').delete().eq('id', session.id);
+      if (!error) {
+        setSession(null);
+        setRecords([]);
+        setShowDeleteConfirm(false);
+        setActiveTab('session');
+      }
+    } catch (e: any) {
+      console.error('deleteSession error:', e.message);
+    } finally {
+      setDeletingSession(false);
+    }
+  };
+
   // ─── Update record status manually ───────────────────────────────────────
   const startEdit = (rec: AttendanceRecord) => {
     setEditingId(rec.id);
@@ -250,9 +291,11 @@ export default function AttendancePortalClient() {
   const checkedInMaNvSet = new Set(records.map(r => r.ma_nv));
   const absentWorkers: WorkerInfo[] = allWorkers.filter(w => w.ma_nv && !checkedInMaNvSet.has(w.ma_nv));
 
-  // ─── Filtered records ─────────────────────────────────────────────────────
+  // ─── Filtered records (status + KTX + Dãy + search) ──────────────────────
   const filteredRecords = records.filter(r => {
     if (filterStatus !== 'all' && r.status !== filterStatus) return false;
+    if (filterKtx !== 'all' && r.ktx !== filterKtx) return false;
+    if (filterDay !== 'all' && r.day !== filterDay) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return r.ho_va_ten.toLowerCase().includes(q) || r.ma_nv.toLowerCase().includes(q);
@@ -261,6 +304,8 @@ export default function AttendancePortalClient() {
   });
 
   const filteredAbsent = absentWorkers.filter(w => {
+    if (filterKtx !== 'all' && w.ktx !== filterKtx) return false;
+    if (filterDay !== 'all' && w.day !== filterDay) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return w.ho_va_ten.toLowerCase().includes(q) || (w.ma_nv || '').toLowerCase().includes(q);
@@ -270,7 +315,7 @@ export default function AttendancePortalClient() {
 
   // ─── Export absent list to Excel ──────────────────────────────────────────
   const handleExportAbsent = () => {
-    const data = absentWorkers.map((w, i) => ({
+    const data = filteredAbsent.map((w, i) => ({
       'STT': i + 1,
       'Họ và tên': w.ho_va_ten,
       'Mã NV': w.ma_nv || '',
@@ -324,10 +369,10 @@ export default function AttendancePortalClient() {
       {/* ─── TAB: Session Management ─── */}
       {activeTab === 'session' && (
         <div className="space-y-5">
-          {/* Date picker + open/close */}
+          {/* Date picker + open/close/delete */}
           <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
             <h2 className="font-semibold text-foreground flex items-center gap-2"><Calendar size={18} className="text-primary" /> Chọn ngày điểm danh</h2>
-            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end flex-wrap">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Ngày điểm danh</label>
                 <input
@@ -354,13 +399,21 @@ export default function AttendancePortalClient() {
                   Mở phiên điểm danh
                 </button>
               )}
+              {/* Delete / Reset button */}
+              {session && (
+                <button onClick={() => setShowDeleteConfirm(true)}
+                  className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors">
+                  <Trash2 size={15} />
+                  Xóa / Reset phiên
+                </button>
+              )}
             </div>
 
             {/* Session status */}
             {!sessionLoading && session && (
               <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border ${session.is_active ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-muted border-border text-muted-foreground'}`}>
                 {session.is_active
-                  ? <><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" /> Phiên đang mở — Công nhân có thể quét QR</>
+                  ? <><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" /> Phiên đang mở — Công nhân có thể quét QR bất cứ lúc nào trong ngày</>
                   : <><div className="w-2 h-2 bg-gray-400 rounded-full" /> Phiên đã đóng — Không nhận điểm danh mới</>
                 }
               </div>
@@ -372,9 +425,9 @@ export default function AttendancePortalClient() {
             )}
           </div>
 
-          {/* QR Code display */}
+          {/* QR Code display — URL uses only date, no session ID */}
           {session?.is_active && attendanceUrl && (
-            <QRCodeDisplay url={`${attendanceUrl}?session=${session.id}&date=${selectedDate}`} sessionDate={selectedDate} />
+            <QRCodeDisplay url={`${attendanceUrl}?date=${selectedDate}`} sessionDate={selectedDate} />
           )}
 
           {/* Quick stats */}
@@ -424,9 +477,13 @@ export default function AttendancePortalClient() {
                 ))}
               </div>
 
-              {/* Filters + export */}
-              <div className="flex flex-wrap gap-3 items-center justify-between">
-                <div className="flex flex-wrap gap-2 items-center">
+              {/* ─── Filters ─── */}
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Filter size={15} className="text-primary" /> Bộ lọc
+                </div>
+                <div className="flex flex-wrap gap-3 items-center">
+                  {/* Status filter */}
                   <div className="flex gap-1 bg-muted rounded-lg p-1">
                     {[
                       { key: 'all', label: `Tất cả (${records.length})` },
@@ -440,17 +497,39 @@ export default function AttendancePortalClient() {
                       </button>
                     ))}
                   </div>
+
+                  {/* KTX filter */}
+                  {ktxOptions.length > 0 && (
+                    <select value={filterKtx} onChange={e => setFilterKtx(e.target.value)}
+                      className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      <option value="all">Tất cả KTX</option>
+                      {ktxOptions.map(k => <option key={k} value={k}>{k}</option>)}
+                    </select>
+                  )}
+
+                  {/* Dãy filter */}
+                  {dayOptions.length > 0 && (
+                    <select value={filterDay} onChange={e => setFilterDay(e.target.value)}
+                      className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      <option value="all">Tất cả Dãy</option>
+                      {dayOptions.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                    </select>
+                  )}
+
+                  {/* Search */}
                   <div className="relative">
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
                     <input type="text" placeholder="Tìm tên / mã NV..." value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       className="pl-8 pr-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 w-44" />
                   </div>
+
+                  {/* Export */}
+                  <button onClick={handleExportAbsent} disabled={filteredAbsent.length === 0}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors ml-auto">
+                    <Download size={13} /> Xuất vắng ({filteredAbsent.length})
+                  </button>
                 </div>
-                <button onClick={handleExportAbsent} disabled={absentWorkers.length === 0}
-                  className="flex items-center gap-2 px-3 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors">
-                  <Download size={14} /> Xuất danh sách vắng ({absentCount})
-                </button>
               </div>
 
               {/* Checked-in records */}
@@ -575,6 +654,35 @@ export default function AttendancePortalClient() {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* ─── Delete Confirm Modal ─── */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-2xl shadow-2xl p-6 max-w-sm w-full space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <Trash2 size={20} className="text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-foreground">Xóa / Reset phiên điểm danh?</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Ngày {selectedDate}</p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">Toàn bộ dữ liệu điểm danh của phiên này sẽ bị xóa vĩnh viễn. Hành động này không thể hoàn tác.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowDeleteConfirm(false)} disabled={deletingSession}
+                className="flex-1 py-2.5 border border-border rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
+                Hủy
+              </button>
+              <button onClick={handleDeleteSession} disabled={deletingSession}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2">
+                {deletingSession ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                Xóa toàn bộ
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
