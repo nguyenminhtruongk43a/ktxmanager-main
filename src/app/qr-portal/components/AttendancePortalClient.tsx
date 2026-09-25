@@ -945,6 +945,11 @@ export default function AttendancePortalClient() {
                       {filteredRecords.map((rec, idx) => {
                         const cfg = STATUS_LABELS[rec.status] || STATUS_LABELS['present'];
                         const isEditing = editingId === rec.id;
+                        // Look up worker info to fill in missing location fields
+                        const workerInfo = allWorkers.find(w => w.ma_nv === rec.ma_nv);
+                        const displayKtx = rec.ktx || workerInfo?.ktx || '';
+                        const displayDay = rec.day || workerInfo?.day || '';
+                        const displayPhong = rec.phong_so || workerInfo?.phong_so || '';
                         return (
                           <div key={rec.id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
                             <div className="flex items-start gap-3">
@@ -960,11 +965,9 @@ export default function AttendancePortalClient() {
                                   )}
                                 </div>
                                 <div className="mt-1 flex flex-col gap-0.5">
-                                  {(rec.ktx || rec.day || rec.phong_so) && (
-                                    <p className="text-xs font-medium text-emerald-700">
-                                      {[rec.ktx, rec.day ? `Dãy ${rec.day}` : null, rec.phong_so ? `Phòng ${rec.phong_so}` : null].filter(Boolean).join(' - ')}
-                                    </p>
-                                  )}
+                                  <p className="text-xs font-medium text-emerald-700">
+                                    {[displayKtx, displayDay ? `Dãy ${displayDay}` : null, displayPhong ? `Phòng ${displayPhong}` : null].filter(Boolean).join(' - ') || 'Chưa có thông tin phòng'}
+                                  </p>
                                   <p className="text-xs text-muted-foreground">
                                     Điểm danh lúc: <span className="font-medium text-foreground">{new Date(rec.checked_in_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                                   </p>
