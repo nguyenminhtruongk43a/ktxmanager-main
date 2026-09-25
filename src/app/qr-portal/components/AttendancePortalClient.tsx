@@ -558,7 +558,10 @@ export default function AttendancePortalClient() {
   };
 
   // ─── Derived data ─────────────────────────────────────────────────────────
-  const checkedInMaNvSet = new Set(records.map(r => r.ma_nv));
+  // Only workers with present/excused status count as "checked in" — manually-absent records are treated as absent
+  const checkedInMaNvSet = new Set(
+    records.filter(r => r.status === 'present' || r.status === 'excused').map(r => r.ma_nv)
+  );
   const zoneWorkers: WorkerInfo[] = activeSession
     ? allWorkers.filter(w => {
         if (activeSession.zone_ktx && w.ktx !== activeSession.zone_ktx) return false;
@@ -627,10 +630,23 @@ export default function AttendancePortalClient() {
     XLSX.writeFile(wb, `CanhBaoVang_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
-  const presentCount = records.filter(r => r.status === 'present').length;
-  const excusedCount = records.filter(r => r.status === 'excused').length;
-  const absentCount = absentWorkers.length;
-  const totalZoneWorkers = zoneWorkers.length;
+  // Scope summary stats to the active KTX filter (Records tab) when set
+  const scopedRecords = filterKtx !== 'all'
+    ? records.filter(r => r.ktx === filterKtx || (allWorkers.find(w => w.ma_nv === r.ma_nv)?.ktx === filterKtx))
+    : records;
+  const scopedZoneWorkers = filterKtx !== 'all'
+    ? zoneWorkers.filter(w => w.ktx === filterKtx)
+    : zoneWorkers;
+
+  const presentCount = scopedRecords.filter(r => r.status === 'present').length;
+  const excusedCount = scopedRecords.filter(r => r.status === 'excused').length;
+  // Absent = total scoped workers minus those who have a present/excused record
+  // This guarantees: totalZoneWorkers - (presentCount + excusedCount) = absentCount exactly
+  const checkedInPresentSet = new Set(
+    scopedRecords.filter(r => r.status === 'present' || r.status === 'excused').map(r => r.ma_nv)
+  );
+  const absentCount = scopedZoneWorkers.filter(w => w.ma_nv && !checkedInPresentSet.has(w.ma_nv)).length;
+  const totalZoneWorkers = scopedZoneWorkers.length;
   const activeSessionZoneLabel = activeSession ? getZoneLabel(activeSession) : '';
 
   const buildQrUrl = (s: AttendanceSession) => {
