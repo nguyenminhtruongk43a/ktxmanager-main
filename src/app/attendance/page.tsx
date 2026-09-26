@@ -19,7 +19,7 @@ interface WorkerInfo {
   phong_so: string;
 }
 
-type PageState = 'form' | 'submitting' | 'success' | 'error' | 'session_closed';
+type PageState = 'form' | 'submitting' | 'success' | 'error' | 'session_closed' | 'already_checked_in';
 
 export default function AttendancePage() {
   const [sessionDate, setSessionDate] = useState<string>('');
@@ -35,6 +35,7 @@ export default function AttendancePage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [workerInfo, setWorkerInfo] = useState<WorkerInfo | null>(null);
   const [checkedInTime, setCheckedInTime] = useState('');
+  const [alreadyCheckedInTime, setAlreadyCheckedInTime] = useState('');
 
   const supabase = createClient();
 
@@ -93,6 +94,23 @@ export default function AttendancePage() {
           phong_so: worker.phong_so || '',
         };
       }
+
+      // Feature 5: Check for duplicate check-in
+      const { data: existingRecord } = await supabase
+        .from('attendance_records')
+        .select('id, checked_in_at, status')
+        .eq('session_id', session.id)
+        .eq('ma_nv', maNv.trim())
+        .in('status', ['present', 'excused'])
+        .maybeSingle();
+
+      if (existingRecord) {
+        setAlreadyCheckedInTime(new Date(existingRecord.checked_in_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }));
+        setWorkerInfo(wInfo);
+        setPageState('already_checked_in');
+        return;
+      }
+
       const now = new Date().toISOString();
       const { error: upsertErr } = await supabase
         .from('attendance_records')
@@ -247,6 +265,45 @@ export default function AttendancePage() {
           <button
             onClick={() => { setPageState('form'); setMaNv(''); setHoVaTen(''); }}
             className="w-full py-4 border-2 border-emerald-300 text-emerald-700 rounded-2xl text-base font-semibold hover:bg-emerald-50 active:scale-95 transition-all"
+          >
+            Điểm danh người khác
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Already checked in ───────────────────────────────────────────────────
+  if (pageState === 'already_checked_in' && workerInfo) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-100 flex items-center justify-center p-5">
+        <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm text-center space-y-5">
+          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle size={40} className="text-amber-600" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Đã điểm danh rồi!</h2>
+            <p className="text-base text-gray-500 mt-1">Ngày {session?.session_date}</p>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-left space-y-3">
+            <div>
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Họ và tên</p>
+              <p className="text-lg font-bold text-gray-900 mt-0.5">{workerInfo.ho_va_ten}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">Mã nhân viên</p>
+              <p className="text-base font-bold text-gray-900 font-mono mt-0.5">{maNv}</p>
+            </div>
+            <div className="pt-3 border-t border-amber-200">
+              <p className="text-sm text-amber-700 font-semibold">
+                ⚠ Bạn đã được ghi nhận điểm danh lúc <strong>{alreadyCheckedInTime}</strong> hôm nay.
+              </p>
+              <p className="text-xs text-gray-500 mt-1">Không thể điểm danh lại trong cùng một phiên.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => { setPageState('form'); setMaNv(''); setHoVaTen(''); }}
+            className="w-full py-4 border-2 border-amber-300 text-amber-700 rounded-2xl text-base font-semibold hover:bg-amber-50 active:scale-95 transition-all"
           >
             Điểm danh người khác
           </button>
