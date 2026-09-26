@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search, Trash2, Filter, MapPin, Bell, BellRing } from 'lucide-react';
+import { QrCode, Calendar, Play, Square, Users, UserCheck, UserX, Download, RefreshCw, Loader2, CheckCircle2, Clock, Edit3, Save, X, AlertCircle, Search, Trash2, Filter, MapPin, Bell, BellRing, UserPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '@/context/AuthContext';
 
@@ -37,6 +37,12 @@ interface WorkerInfo {
   ktx: string;
   day: string;
   phong_so: string;
+  ngay_sinh?: string;
+  don_vi?: string;
+  ho_khau_tinh?: string;
+  cccd?: string;
+  to_truong?: string;
+  sdt_to_truong?: string;
 }
 
 interface AbsenceAlert {
@@ -129,7 +135,7 @@ async function fetchAllWorkers(supabase: ReturnType<typeof createClient>): Promi
   while (true) {
     const { data, error } = await supabase
       .from('workers')
-      .select('id, ho_va_ten, ma_nv, ktx, day, phong_so')
+      .select('id, ho_va_ten, ma_nv, ktx, day, phong_so, ngay_sinh, don_vi, ho_khau_tinh, cccd, to_truong, sdt_to_truong')
       .order('ho_va_ten')
       .range(from, from + PAGE - 1);
     if (error || !data || data.length === 0) break;
@@ -152,13 +158,12 @@ export default function AttendancePortalClient() {
   const [deletingSession, setDeletingSession] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  // Free-text zone fields (feature 2)
   const [zoneKtx, setZoneKtx] = useState('');
   const [zoneDay, setZoneDay] = useState('');
   const [zonePhong, setZonePhong] = useState('');
 
   const [ktxList, setKtxList] = useState<string[]>([]);
-  const [dayListByKtx, setDayListByKtx] = useState<Record<string, string[]>>({});
-  const [phongListByKtxDay, setPhongListByKtxDay] = useState<Record<string, string[]>>({});
 
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [allWorkers, setAllWorkers] = useState<WorkerInfo[]>([]);
@@ -182,10 +187,31 @@ export default function AttendancePortalClient() {
   const [filterPhong, setFilterPhong] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Edit record status/note
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editStatus, setEditStatus] = useState('');
   const [editNote, setEditNote] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Inline location edit for checked-in records (feature 1 & 4)
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [editLocKtx, setEditLocKtx] = useState('');
+  const [editLocDay, setEditLocDay] = useState('');
+  const [editLocPhong, setEditLocPhong] = useState('');
+  const [savingLocation, setSavingLocation] = useState(false);
+
+  // Inline location edit for absent workers (feature 4)
+  const [editingAbsentId, setEditingAbsentId] = useState<string | null>(null);
+  const [editAbsentKtx, setEditAbsentKtx] = useState('');
+  const [editAbsentDay, setEditAbsentDay] = useState('');
+  const [editAbsentPhong, setEditAbsentPhong] = useState('');
+  const [savingAbsent, setSavingAbsent] = useState(false);
+
+  // Proxy check-in (feature 4)
+  const [proxyCheckingIn, setProxyCheckingIn] = useState<string | null>(null);
+
+  // Delete record (feature 4)
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
 
   const [attendanceUrl, setAttendanceUrl] = useState('');
   const { currentUser } = useAuth();
@@ -203,28 +229,8 @@ export default function AttendancePortalClient() {
       const workers = await fetchAllWorkers(supabase);
       setAllWorkers(workers);
       const ktxSet = new Set<string>();
-      const dayMap: Record<string, Set<string>> = {};
-      const phongMap: Record<string, Set<string>> = {};
-      workers.forEach(w => {
-        if (w.ktx) {
-          ktxSet.add(w.ktx);
-          if (!dayMap[w.ktx]) dayMap[w.ktx] = new Set();
-          if (w.day) {
-            dayMap[w.ktx].add(w.day);
-            const key = `${w.ktx}__${w.day}`;
-            if (!phongMap[key]) phongMap[key] = new Set();
-            if (w.phong_so) phongMap[key].add(w.phong_so);
-          }
-        }
-      });
-      const sortedKtx = Array.from(ktxSet).sort();
-      setKtxList(sortedKtx);
-      const dayResult: Record<string, string[]> = {};
-      sortedKtx.forEach(k => { dayResult[k] = Array.from(dayMap[k] || []).sort(); });
-      setDayListByKtx(dayResult);
-      const phongResult: Record<string, string[]> = {};
-      Object.entries(phongMap).forEach(([k, v]) => { phongResult[k] = Array.from(v).sort(); });
-      setPhongListByKtxDay(phongResult);
+      workers.forEach(w => { if (w.ktx) ktxSet.add(w.ktx); });
+      setKtxList(Array.from(ktxSet).sort());
     };
     load();
   }, []);
@@ -283,30 +289,19 @@ export default function AttendancePortalClient() {
   // ─── Realtime subscription ────────────────────────────────────────────────
   useEffect(() => {
     if (!activeSession?.id) return;
-
-    // Cleanup previous channel
     if (realtimeChannelRef.current) {
       supabase.removeChannel(realtimeChannelRef.current);
       realtimeChannelRef.current = null;
     }
-
     const channel = supabase
       .channel(`attendance_records_${activeSession.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'attendance_records',
-          filter: `session_id=eq.${activeSession.id}`,
-        },
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_records', filter: `session_id=eq.${activeSession.id}` },
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const newRec = payload.new as AttendanceRecord;
             setRecords(prev => {
               const exists = prev.some(r => r.id === newRec.id);
               if (exists) return prev;
-              // Flash notification
               setNewCheckInFlash(true);
               setTimeout(() => setNewCheckInFlash(false), 3000);
               return [newRec, ...prev];
@@ -320,12 +315,8 @@ export default function AttendancePortalClient() {
           }
         }
       )
-      .subscribe((status) => {
-        setRealtimeConnected(status === 'SUBSCRIBED');
-      });
-
+      .subscribe((status) => { setRealtimeConnected(status === 'SUBSCRIBED'); });
     realtimeChannelRef.current = channel;
-
     return () => {
       supabase.removeChannel(channel);
       realtimeChannelRef.current = null;
@@ -338,7 +329,6 @@ export default function AttendancePortalClient() {
     if (allWorkers.length === 0) return;
     setAlertsLoading(true);
     try {
-      // Get last N days of attendance sessions
       const today = new Date();
       const dates: string[] = [];
       for (let i = 0; i < 14; i++) {
@@ -346,80 +336,38 @@ export default function AttendancePortalClient() {
         d.setDate(d.getDate() - i);
         dates.push(d.toISOString().slice(0, 10));
       }
-
-      // Fetch all sessions in last 14 days
       const { data: sessionsData } = await supabase
         .from('attendance_sessions')
         .select('id, session_date, zone_ktx')
         .in('session_date', dates)
         .order('session_date', { ascending: false });
-
-      if (!sessionsData || sessionsData.length === 0) {
-        setAbsenceAlerts([]);
-        setAlertsLoading(false);
-        return;
-      }
-
+      if (!sessionsData || sessionsData.length === 0) { setAbsenceAlerts([]); setAlertsLoading(false); return; }
       const sessionIds = sessionsData.map((s: any) => s.id);
-
-      // Fetch all records for those sessions
       const { data: recordsData } = await supabase
         .from('attendance_records')
         .select('ma_nv, session_id, status')
         .in('session_id', sessionIds)
         .eq('status', 'present');
-
-      const presentSet = new Set<string>(
-        (recordsData || []).map((r: any) => `${r.ma_nv}__${r.session_id}`)
-      );
-
-      // Build session date map
+      const presentSet = new Set<string>((recordsData || []).map((r: any) => `${r.ma_nv}__${r.session_id}`));
       const sessionDateMap: Record<string, string> = {};
       sessionsData.forEach((s: any) => { sessionDateMap[s.id] = s.session_date; });
-
-      // For each worker, count consecutive absent days from today backwards
       const alerts: AbsenceAlert[] = [];
-      const targetWorkers = alertKtxFilter
-        ? allWorkers.filter(w => w.ktx === alertKtxFilter)
-        : allWorkers;
-
+      const targetWorkers = alertKtxFilter ? allWorkers.filter(w => w.ktx === alertKtxFilter) : allWorkers;
       for (const worker of targetWorkers) {
         if (!worker.ma_nv) continue;
-
-        // Find sessions relevant to this worker's zone
-        const relevantSessions = sessionsData.filter((s: any) =>
-          !s.zone_ktx || s.zone_ktx === worker.ktx
-        );
-
+        const relevantSessions = sessionsData.filter((s: any) => !s.zone_ktx || s.zone_ktx === worker.ktx);
         if (relevantSessions.length === 0) continue;
-
-        // Count consecutive absences from most recent session backwards
         let consecutiveAbsent = 0;
         let lastSeenDate: string | null = null;
-
         for (const sess of relevantSessions) {
           const key = `${worker.ma_nv}__${sess.id}`;
-          if (presentSet.has(key)) {
-            lastSeenDate = sessionDateMap[sess.id];
-            break;
-          }
+          if (presentSet.has(key)) { lastSeenDate = sessionDateMap[sess.id]; break; }
           consecutiveAbsent++;
         }
-
         if (consecutiveAbsent >= absenceThreshold) {
-          alerts.push({
-            ma_nv: worker.ma_nv,
-            ho_va_ten: worker.ho_va_ten,
-            ktx: worker.ktx || '',
-            day: worker.day || '',
-            phong_so: worker.phong_so || '',
-            absent_days: consecutiveAbsent,
-            last_seen_date: lastSeenDate,
-          });
+          alerts.push({ ma_nv: worker.ma_nv, ho_va_ten: worker.ho_va_ten, ktx: worker.ktx || '', day: worker.day || '', phong_so: worker.phong_so || '', absent_days: consecutiveAbsent, last_seen_date: lastSeenDate });
         }
       }
-
-      // Sort by most absent days first
       alerts.sort((a, b) => b.absent_days - a.absent_days);
       setAbsenceAlerts(alerts);
     } catch (e: any) {
@@ -430,9 +378,7 @@ export default function AttendancePortalClient() {
   }, [allWorkers, absenceThreshold, alertKtxFilter]);
 
   useEffect(() => {
-    if (activeTab === 'alerts' && allWorkers.length > 0) {
-      computeAbsenceAlerts();
-    }
+    if (activeTab === 'alerts' && allWorkers.length > 0) computeAbsenceAlerts();
   }, [activeTab, computeAbsenceAlerts]);
 
   // ─── Derive filter options ────────────────────────────────────────────────
@@ -454,12 +400,6 @@ export default function AttendancePortalClient() {
   useEffect(() => { setFilterDay('all'); setFilterPhong('all'); }, [filterKtx]);
   useEffect(() => { setFilterPhong('all'); }, [filterDay]);
 
-  const availableDays = zoneKtx ? (dayListByKtx[zoneKtx] || []) : [];
-  const availablePhongs = (zoneKtx && zoneDay) ? (phongListByKtxDay[`${zoneKtx}__${zoneDay}`] || []) : [];
-
-  useEffect(() => { setZoneDay(''); setZonePhong(''); }, [zoneKtx]);
-  useEffect(() => { setZonePhong(''); }, [zoneDay]);
-
   // ─── Open session ─────────────────────────────────────────────────────────
   const handleOpenSession = async () => {
     setOpeningSession(true);
@@ -467,15 +407,7 @@ export default function AttendancePortalClient() {
       const { data, error } = await supabase
         .from('attendance_sessions')
         .upsert(
-          {
-            session_date: selectedDate,
-            opened_by: currentUser?.id ?? null,
-            is_active: true,
-            opened_at: new Date().toISOString(),
-            zone_ktx: zoneKtx,
-            zone_day: zoneDay,
-            zone_phong: zonePhong,
-          },
+          { session_date: selectedDate, opened_by: currentUser?.id ?? null, is_active: true, opened_at: new Date().toISOString(), zone_ktx: zoneKtx, zone_day: zoneDay, zone_phong: zonePhong },
           { onConflict: 'session_date,zone_ktx,zone_day,zone_phong' }
         )
         .select()
@@ -497,10 +429,7 @@ export default function AttendancePortalClient() {
     if (!activeSession) return;
     setClosingSession(true);
     try {
-      const { error } = await supabase
-        .from('attendance_sessions')
-        .update({ is_active: false })
-        .eq('id', activeSession.id);
+      const { error } = await supabase.from('attendance_sessions').update({ is_active: false }).eq('id', activeSession.id);
       if (!error) {
         setActiveSession(prev => prev ? { ...prev, is_active: false } : prev);
         await fetchSessions(selectedDate, true);
@@ -532,20 +461,18 @@ export default function AttendancePortalClient() {
     }
   };
 
-  // ─── Edit record ──────────────────────────────────────────────────────────
+  // ─── Edit record status/note ──────────────────────────────────────────────
   const startEdit = (rec: AttendanceRecord) => {
     setEditingId(rec.id);
     setEditStatus(rec.status);
     setEditNote(rec.ghi_chu || '');
+    setEditingLocationId(null);
   };
 
   const saveEdit = async (recId: string) => {
     setSavingEdit(true);
     try {
-      const { error } = await supabase
-        .from('attendance_records')
-        .update({ status: editStatus, ghi_chu: editNote })
-        .eq('id', recId);
+      const { error } = await supabase.from('attendance_records').update({ status: editStatus, ghi_chu: editNote }).eq('id', recId);
       if (!error) {
         setRecords(prev => prev.map(r => r.id === recId ? { ...r, status: editStatus, ghi_chu: editNote } : r));
         setEditingId(null);
@@ -557,8 +484,107 @@ export default function AttendancePortalClient() {
     }
   };
 
+  // ─── Inline location edit for checked-in record (feature 1 & 4) ──────────
+  const startEditLocation = (rec: AttendanceRecord, workerKtx: string, workerDay: string, workerPhong: string) => {
+    setEditingLocationId(rec.id);
+    setEditLocKtx(rec.ktx || workerKtx || '');
+    setEditLocDay(rec.day || workerDay || '');
+    setEditLocPhong(rec.phong_so || workerPhong || '');
+    setEditingId(null);
+  };
+
+  const saveLocation = async (recId: string) => {
+    setSavingLocation(true);
+    try {
+      const { error } = await supabase.from('attendance_records').update({ ktx: editLocKtx, day: editLocDay, phong_so: editLocPhong }).eq('id', recId);
+      if (!error) {
+        setRecords(prev => prev.map(r => r.id === recId ? { ...r, ktx: editLocKtx, day: editLocDay, phong_so: editLocPhong } : r));
+        // Also update worker record in DB
+        const rec = records.find(r => r.id === recId);
+        if (rec?.ma_nv) {
+          await supabase.from('workers').update({ ktx: editLocKtx, day: editLocDay, phong_so: editLocPhong }).eq('ma_nv', rec.ma_nv);
+          setAllWorkers(prev => prev.map(w => w.ma_nv === rec.ma_nv ? { ...w, ktx: editLocKtx, day: editLocDay, phong_so: editLocPhong } : w));
+        }
+        setEditingLocationId(null);
+      }
+    } catch (e: any) {
+      console.error('saveLocation error:', e.message);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  // ─── Inline location edit for absent worker (feature 4) ──────────────────
+  const startEditAbsent = (w: WorkerInfo) => {
+    setEditingAbsentId(w.id);
+    setEditAbsentKtx(w.ktx || '');
+    setEditAbsentDay(w.day || '');
+    setEditAbsentPhong(w.phong_so || '');
+  };
+
+  const saveAbsentLocation = async (workerId: string) => {
+    setSavingAbsent(true);
+    try {
+      const { error } = await supabase.from('workers').update({ ktx: editAbsentKtx, day: editAbsentDay, phong_so: editAbsentPhong }).eq('id', workerId);
+      if (!error) {
+        setAllWorkers(prev => prev.map(w => w.id === workerId ? { ...w, ktx: editAbsentKtx, day: editAbsentDay, phong_so: editAbsentPhong } : w));
+        setEditingAbsentId(null);
+      }
+    } catch (e: any) {
+      console.error('saveAbsentLocation error:', e.message);
+    } finally {
+      setSavingAbsent(false);
+    }
+  };
+
+  // ─── Proxy check-in (feature 4) ───────────────────────────────────────────
+  const handleProxyCheckIn = async (w: WorkerInfo) => {
+    if (!activeSession) return;
+    // Feature 5: block duplicate check-in
+    const alreadyCheckedIn = records.some(r => r.ma_nv === w.ma_nv && (r.status === 'present' || r.status === 'excused'));
+    if (alreadyCheckedIn) {
+      alert(`${w.ho_va_ten} đã được điểm danh trong phiên này rồi.`);
+      return;
+    }
+    setProxyCheckingIn(w.id);
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .upsert(
+          { session_id: activeSession.id, session_date: activeSession.session_date, ma_nv: w.ma_nv, ho_va_ten: w.ho_va_ten, ktx: w.ktx || '', day: w.day || '', phong_so: w.phong_so || '', status: 'present', checked_in_at: now, ghi_chu: 'Điểm danh hộ bởi quản lý' },
+          { onConflict: 'session_id,ma_nv' }
+        )
+        .select()
+        .single();
+      if (!error && data) {
+        setRecords(prev => {
+          const exists = prev.some(r => r.id === (data as AttendanceRecord).id);
+          if (exists) return prev.map(r => r.id === (data as AttendanceRecord).id ? data as AttendanceRecord : r);
+          return [data as AttendanceRecord, ...prev];
+        });
+      }
+    } catch (e: any) {
+      console.error('proxyCheckIn error:', e.message);
+    } finally {
+      setProxyCheckingIn(null);
+    }
+  };
+
+  // ─── Delete record (feature 4) ────────────────────────────────────────────
+  const handleDeleteRecord = async (recId: string) => {
+    setDeletingRecordId(recId);
+    try {
+      const { error } = await supabase.from('attendance_records').delete().eq('id', recId);
+      if (!error) setRecords(prev => prev.filter(r => r.id !== recId));
+    } catch (e: any) {
+      console.error('deleteRecord error:', e.message);
+    } finally {
+      setDeletingRecordId(null);
+    }
+  };
+
   // ─── Derived data ─────────────────────────────────────────────────────────
-  // Only workers with present/excused status count as "checked in" — manually-absent records are treated as absent
   const checkedInMaNvSet = new Set(
     records.filter(r => r.status === 'present' || r.status === 'excused').map(r => r.ma_nv)
   );
@@ -596,16 +622,52 @@ export default function AttendancePortalClient() {
     return true;
   });
 
+  // ─── Excel export helpers ─────────────────────────────────────────────────
+  const handleExportCheckedIn = () => {
+    const data = filteredRecords.map((rec, i) => {
+      const workerInfo = allWorkers.find(w => w.ma_nv === rec.ma_nv);
+      const displayKtx = rec.ktx || workerInfo?.ktx || '';
+      const displayDay = rec.day || workerInfo?.day || '';
+      const displayPhong = rec.phong_so || workerInfo?.phong_so || '';
+      return {
+        'STT': i + 1,
+        'Họ và tên': rec.ho_va_ten,
+        'Mã NV': rec.ma_nv || '',
+        'Ngày sinh': workerInfo?.ngay_sinh || '',
+        'Đơn vị': workerInfo?.don_vi || '',
+        'KTX': displayKtx,
+        'Dãy': displayDay,
+        'Phòng': displayPhong,
+        'Hộ khẩu thường trú': workerInfo?.ho_khau_tinh || '',
+        'Số CCCD': workerInfo?.cccd || '',
+        'Tổ trưởng': workerInfo?.to_truong || '',
+        'SĐT tổ trưởng': workerInfo?.sdt_to_truong || '',
+        'Trạng thái': STATUS_LABELS[rec.status]?.label || rec.status,
+        'Thời gian điểm danh': new Date(rec.checked_in_at).toLocaleString('vi-VN'),
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Đã điểm danh');
+    XLSX.writeFile(wb, `DaDiemDanh_${selectedDate}.xlsx`);
+  };
+
   const handleExportAbsent = () => {
     const data = filteredAbsent.map((w, i) => ({
       'STT': i + 1,
       'Họ và tên': w.ho_va_ten,
       'Mã NV': w.ma_nv || '',
+      'Ngày sinh': w.ngay_sinh || '',
+      'Đơn vị': w.don_vi || '',
       'KTX': w.ktx || '',
       'Dãy': w.day || '',
       'Phòng': w.phong_so || '',
+      'Hộ khẩu thường trú': w.ho_khau_tinh || '',
+      'Số CCCD': w.cccd || '',
+      'Tổ trưởng': w.to_truong || '',
+      'SĐT tổ trưởng': w.sdt_to_truong || '',
       'Trạng thái': 'Vắng mặt',
-      'Ngày': selectedDate,
+      'Thời gian điểm danh': '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -640,8 +702,6 @@ export default function AttendancePortalClient() {
 
   const presentCount = scopedRecords.filter(r => r.status === 'present').length;
   const excusedCount = scopedRecords.filter(r => r.status === 'excused').length;
-  // Absent = total scoped workers minus those who have a present/excused record
-  // This guarantees: totalZoneWorkers - (presentCount + excusedCount) = absentCount exactly
   const checkedInPresentSet = new Set(
     scopedRecords.filter(r => r.status === 'present' || r.status === 'excused').map(r => r.ma_nv)
   );
@@ -667,7 +727,6 @@ export default function AttendancePortalClient() {
           <p className="text-sm text-muted-foreground mt-0.5">Quản lý điểm danh hàng ngày qua mã QR — tổng {allWorkers.length.toLocaleString('vi-VN')} công nhân</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Realtime status indicator */}
           {activeSession && (
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border ${realtimeConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
               <div className={`w-2 h-2 rounded-full ${realtimeConnected ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
@@ -722,6 +781,7 @@ export default function AttendancePortalClient() {
                 />
               </div>
             </div>
+            {/* Feature 2: Free-text KTX/Dãy/Phòng fields */}
             <div className="bg-muted/50 border border-border rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <MapPin size={15} className="text-primary" /> Khu vực QR (để trống = Toàn KTX)
@@ -729,32 +789,38 @@ export default function AttendancePortalClient() {
               <div className="flex flex-wrap gap-3">
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">Khu KTX</label>
-                  <select value={zoneKtx} onChange={e => setZoneKtx(e.target.value)}
-                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
-                    <option value="">Toàn KTX</option>
-                    {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
-                  </select>
+                  <input
+                    type="text"
+                    value={zoneKtx}
+                    onChange={e => setZoneKtx(e.target.value)}
+                    placeholder="VD: KTX 1, KTX A..."
+                    list="ktx-suggestions"
+                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[140px]"
+                  />
+                  <datalist id="ktx-suggestions">
+                    {ktxList.map(k => <option key={k} value={k} />)}
+                  </datalist>
                 </div>
-                {zoneKtx && (
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Dãy nhà</label>
-                    <select value={zoneDay} onChange={e => setZoneDay(e.target.value)}
-                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
-                      <option value="">Toàn dãy</option>
-                      {availableDays.map(d => <option key={d} value={d}>Dãy {d}</option>)}
-                    </select>
-                  </div>
-                )}
-                {zoneKtx && zoneDay && (
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Phòng cụ thể</label>
-                    <select value={zonePhong} onChange={e => setZonePhong(e.target.value)}
-                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]">
-                      <option value="">Toàn phòng</option>
-                      {availablePhongs.map(p => <option key={p} value={p}>Phòng {p}</option>)}
-                    </select>
-                  </div>
-                )}
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Dãy nhà</label>
+                  <input
+                    type="text"
+                    value={zoneDay}
+                    onChange={e => setZoneDay(e.target.value)}
+                    placeholder="VD: A, B, 1, 2..."
+                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Phòng cụ thể</label>
+                  <input
+                    type="text"
+                    value={zonePhong}
+                    onChange={e => setZonePhong(e.target.value)}
+                    placeholder="VD: 101, 202..."
+                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
+                  />
+                </div>
               </div>
               <div className="text-xs text-muted-foreground">
                 Phạm vi QR: <strong className="text-foreground">
@@ -929,8 +995,13 @@ export default function AttendancePortalClient() {
                       onChange={e => setSearchQuery(e.target.value)}
                       className="pl-8 pr-3 py-1.5 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 w-44" />
                   </div>
+                  {/* Feature 3: Export checked-in button */}
+                  <button onClick={handleExportCheckedIn} disabled={filteredRecords.length === 0}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                    <Download size={13} /> Xuất đã ĐD ({filteredRecords.length})
+                  </button>
                   <button onClick={handleExportAbsent} disabled={filteredAbsent.length === 0}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors ml-auto">
+                    className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors">
                     <Download size={13} /> Xuất vắng ({filteredAbsent.length})
                   </button>
                 </div>
@@ -961,11 +1032,15 @@ export default function AttendancePortalClient() {
                       {filteredRecords.map((rec, idx) => {
                         const cfg = STATUS_LABELS[rec.status] || STATUS_LABELS['present'];
                         const isEditing = editingId === rec.id;
-                        // Look up worker info to fill in missing location fields
+                        const isEditingLoc = editingLocationId === rec.id;
                         const workerInfo = allWorkers.find(w => w.ma_nv === rec.ma_nv);
                         const displayKtx = rec.ktx || workerInfo?.ktx || '';
                         const displayDay = rec.day || workerInfo?.day || '';
                         const displayPhong = rec.phong_so || workerInfo?.phong_so || '';
+                        const hasLocation = displayKtx || displayDay || displayPhong;
+                        const locationLabel = hasLocation
+                          ? [displayKtx, displayDay ? `Dãy ${displayDay}` : null, displayPhong ? `Phòng ${displayPhong}` : null].filter(Boolean).join(' - ')
+                          : null;
                         return (
                           <div key={rec.id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
                             <div className="flex items-start gap-3">
@@ -981,9 +1056,34 @@ export default function AttendancePortalClient() {
                                   )}
                                 </div>
                                 <div className="mt-1 flex flex-col gap-0.5">
-                                  <p className="text-xs font-medium text-emerald-700">
-                                    {[displayKtx, displayDay ? `Dãy ${displayDay}` : null, displayPhong ? `Phòng ${displayPhong}` : null].filter(Boolean).join(' - ') || 'Chưa có thông tin phòng'}
-                                  </p>
+                                  {/* Feature 1: Clickable location line */}
+                                  {!isEditingLoc ? (
+                                    <button
+                                      onClick={() => startEditLocation(rec, workerInfo?.ktx || '', workerInfo?.day || '', workerInfo?.phong_so || '')}
+                                      className={`text-xs font-medium text-left w-fit rounded px-1 -ml-1 py-0.5 transition-colors ${hasLocation ? 'text-emerald-700 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50 border border-dashed border-amber-300'}`}
+                                      title="Bấm để chỉnh sửa vị trí phòng"
+                                    >
+                                      {locationLabel || '⚠ Chưa có thông tin phòng — Bấm để nhập'}
+                                    </button>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5 items-center mt-1">
+                                      <input type="text" value={editLocKtx} onChange={e => setEditLocKtx(e.target.value)} placeholder="KTX" list="ktx-suggestions-loc"
+                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" />
+                                      <datalist id="ktx-suggestions-loc">{ktxList.map(k => <option key={k} value={k} />)}</datalist>
+                                      <input type="text" value={editLocDay} onChange={e => setEditLocDay(e.target.value)} placeholder="Dãy"
+                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                      <input type="text" value={editLocPhong} onChange={e => setEditLocPhong(e.target.value)} placeholder="Phòng"
+                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                      <button onClick={() => saveLocation(rec.id)} disabled={savingLocation}
+                                        className="flex items-center gap-1 px-2 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50">
+                                        {savingLocation ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />} Lưu
+                                      </button>
+                                      <button onClick={() => setEditingLocationId(null)}
+                                        className="flex items-center gap-1 px-2 py-1 border border-border rounded text-xs text-muted-foreground hover:bg-muted">
+                                        <X size={10} /> Hủy
+                                      </button>
+                                    </div>
+                                  )}
                                   <p className="text-xs text-muted-foreground">
                                     Điểm danh lúc: <span className="font-medium text-foreground">{new Date(rec.checked_in_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                                   </p>
@@ -1011,11 +1111,18 @@ export default function AttendancePortalClient() {
                                 )}
                                 {rec.ghi_chu && !isEditing && <p className="text-xs text-muted-foreground mt-0.5 italic">{rec.ghi_chu}</p>}
                               </div>
-                              {!isEditing && (
-                                <button onClick={() => startEdit(rec)}
-                                  className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors flex-shrink-0" title="Cập nhật trạng thái">
-                                  <Edit3 size={14} />
-                                </button>
+                              {/* Feature 4: Action buttons for checked-in row */}
+                              {!isEditing && !isEditingLoc && (
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  <button onClick={() => startEdit(rec)} title="Sửa trạng thái"
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                                    <Edit3 size={13} />
+                                  </button>
+                                  <button onClick={() => { if (confirm(`Xóa bản ghi điểm danh của ${rec.ho_va_ten}?`)) handleDeleteRecord(rec.id); }} disabled={deletingRecordId === rec.id} title="Xóa bản ghi"
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50">
+                                    {deletingRecordId === rec.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                                  </button>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -1044,27 +1151,72 @@ export default function AttendancePortalClient() {
                     </div>
                   ) : (
                     <div className="divide-y divide-border">
-                      {filteredAbsent.map((w, idx) => (
-                        <div key={w.id} className="px-4 py-3 hover:bg-red-50/50 transition-colors">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 text-red-600 font-bold text-sm">
-                              {idx + 1}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-semibold text-foreground text-sm">{w.ho_va_ten}</span>
-                                {w.ma_nv && <span className="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{w.ma_nv}</span>}
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-red-100 text-red-700 border-red-200">Chưa điểm danh</span>
+                      {filteredAbsent.map((w, idx) => {
+                        const isEditingAbsent = editingAbsentId === w.id;
+                        return (
+                          <div key={w.id} className="px-4 py-3 hover:bg-red-50/50 transition-colors">
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 text-red-600 font-bold text-sm">
+                                {idx + 1}
                               </div>
-                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
-                                {w.ktx && <span>{w.ktx}</span>}
-                                {w.day && <span>Dãy {w.day}</span>}
-                                {w.phong_so && <span>Phòng {w.phong_so}</span>}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold text-foreground text-sm">{w.ho_va_ten}</span>
+                                  {w.ma_nv && <span className="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{w.ma_nv}</span>}
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-red-100 text-red-700 border-red-200">Chưa điểm danh</span>
+                                </div>
+                                {!isEditingAbsent ? (
+                                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
+                                    {w.ktx && <span>{w.ktx}</span>}
+                                    {w.day && <span>Dãy {w.day}</span>}
+                                    {w.phong_so && <span>Phòng {w.phong_so}</span>}
+                                    {!w.ktx && !w.day && !w.phong_so && (
+                                      <span className="text-amber-600 italic">Chưa có thông tin phòng</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1.5 items-center mt-1.5">
+                                    <input type="text" value={editAbsentKtx} onChange={e => setEditAbsentKtx(e.target.value)} placeholder="KTX" list="ktx-suggestions-absent"
+                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" />
+                                    <datalist id="ktx-suggestions-absent">{ktxList.map(k => <option key={k} value={k} />)}</datalist>
+                                    <input type="text" value={editAbsentDay} onChange={e => setEditAbsentDay(e.target.value)} placeholder="Dãy"
+                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                    <input type="text" value={editAbsentPhong} onChange={e => setEditAbsentPhong(e.target.value)} placeholder="Phòng"
+                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                    <button onClick={() => saveAbsentLocation(w.id)} disabled={savingAbsent}
+                                      className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs font-medium hover:opacity-90 disabled:opacity-50">
+                                      {savingAbsent ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />} Lưu
+                                    </button>
+                                    <button onClick={() => setEditingAbsentId(null)}
+                                      className="flex items-center gap-1 px-2 py-1 border border-border rounded text-xs text-muted-foreground hover:bg-muted">
+                                      <X size={10} /> Hủy
+                                    </button>
+                                  </div>
+                                )}
                               </div>
+                              {/* Feature 4: Action buttons for absent row */}
+                              {!isEditingAbsent && (
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  {/* Proxy check-in button */}
+                                  <button
+                                    onClick={() => handleProxyCheckIn(w)}
+                                    disabled={proxyCheckingIn === w.id}
+                                    title="Điểm danh hộ"
+                                    className="flex items-center gap-1 px-2 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                                    {proxyCheckingIn === w.id ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />}
+                                    Điểm danh hộ
+                                  </button>
+                                  {/* Edit location button */}
+                                  <button onClick={() => startEditAbsent(w)} title="Sửa vị trí phòng"
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                                    <Edit3 size={13} />
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1077,7 +1229,6 @@ export default function AttendancePortalClient() {
       {/* ─── TAB: Absence Alerts ─── */}
       {activeTab === 'alerts' && (
         <div className="space-y-4">
-          {/* Info banner */}
           <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
             <BellRing size={18} className="flex-shrink-0 mt-0.5 text-amber-600" />
             <div>
@@ -1086,7 +1237,6 @@ export default function AttendancePortalClient() {
             </div>
           </div>
 
-          {/* Controls */}
           <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap gap-3 items-end">
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Ngưỡng cảnh báo (số ngày vắng liên tiếp)</label>
@@ -1116,7 +1266,6 @@ export default function AttendancePortalClient() {
             )}
           </div>
 
-          {/* Alert list */}
           {alertsLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="flex flex-col items-center gap-3">
