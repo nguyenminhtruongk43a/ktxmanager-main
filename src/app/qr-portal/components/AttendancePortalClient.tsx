@@ -165,6 +165,15 @@ export default function AttendancePortalClient() {
 
   const [ktxList, setKtxList] = useState<string[]>([]);
 
+  // Cascading lists derived from workers
+  const [dayList, setDayList] = useState<string[]>([]);
+  const [phongList, setPhongList] = useState<string[]>([]);
+
+  // Manual input mode flags for session zone fields
+  const [isManualKtx, setIsManualKtx] = useState(false);
+  const [isManualDay, setIsManualDay] = useState(false);
+  const [isManualPhong, setIsManualPhong] = useState(false);
+
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [allWorkers, setAllWorkers] = useState<WorkerInfo[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -200,12 +209,22 @@ export default function AttendancePortalClient() {
   const [editLocPhong, setEditLocPhong] = useState('');
   const [savingLocation, setSavingLocation] = useState(false);
 
+  // Manual input mode flags for inline location edit (checked-in)
+  const [isManualLocKtx, setIsManualLocKtx] = useState(false);
+  const [isManualLocDay, setIsManualLocDay] = useState(false);
+  const [isManualLocPhong, setIsManualLocPhong] = useState(false);
+
   // Inline location edit for absent workers (feature 4)
   const [editingAbsentId, setEditingAbsentId] = useState<string | null>(null);
   const [editAbsentKtx, setEditAbsentKtx] = useState('');
   const [editAbsentDay, setEditAbsentDay] = useState('');
   const [editAbsentPhong, setEditAbsentPhong] = useState('');
   const [savingAbsent, setSavingAbsent] = useState(false);
+
+  // Manual input mode flags for inline location edit (absent)
+  const [isManualAbsKtx, setIsManualAbsKtx] = useState(false);
+  const [isManualAbsDay, setIsManualAbsDay] = useState(false);
+  const [isManualAbsPhong, setIsManualAbsPhong] = useState(false);
 
   // Proxy check-in (feature 4)
   const [proxyCheckingIn, setProxyCheckingIn] = useState<string | null>(null);
@@ -234,6 +253,23 @@ export default function AttendancePortalClient() {
     };
     load();
   }, []);
+
+  // ─── Cascade: KTX → Dãy list ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!zoneKtx || isManualKtx) { setDayList([]); return; }
+    const days = Array.from(new Set(allWorkers.filter(w => w.ktx === zoneKtx && w.day).map(w => w.day))).sort();
+    setDayList(days);
+    // Reset downstream if current value not in new list
+    if (!isManualDay && zoneDay && !days.includes(zoneDay)) { setZoneDay(''); setIsManualDay(false); }
+  }, [zoneKtx, allWorkers, isManualKtx]);
+
+  // ─── Cascade: Dãy → Phòng list ───────────────────────────────────────────
+  useEffect(() => {
+    if (!zoneKtx || !zoneDay || isManualDay) { setPhongList([]); return; }
+    const phongs = Array.from(new Set(allWorkers.filter(w => w.ktx === zoneKtx && w.day === zoneDay && w.phong_so).map(w => w.phong_so))).sort();
+    setPhongList(phongs);
+    if (!isManualPhong && zonePhong && !phongs.includes(zonePhong)) { setZonePhong(''); setIsManualPhong(false); }
+  }, [zoneKtx, zoneDay, allWorkers, isManualDay]);
 
   // ─── Load sessions ────────────────────────────────────────────────────────
   const fetchSessions = useCallback(async (date: string, silent = false) => {
@@ -490,6 +526,9 @@ export default function AttendancePortalClient() {
     setEditLocKtx(rec.ktx || workerKtx || '');
     setEditLocDay(rec.day || workerDay || '');
     setEditLocPhong(rec.phong_so || workerPhong || '');
+    setIsManualLocKtx(false);
+    setIsManualLocDay(false);
+    setIsManualLocPhong(false);
     setEditingId(null);
   };
 
@@ -520,6 +559,9 @@ export default function AttendancePortalClient() {
     setEditAbsentKtx(w.ktx || '');
     setEditAbsentDay(w.day || '');
     setEditAbsentPhong(w.phong_so || '');
+    setIsManualAbsKtx(false);
+    setIsManualAbsDay(false);
+    setIsManualAbsPhong(false);
   };
 
   const saveAbsentLocation = async (workerId: string) => {
@@ -787,39 +829,101 @@ export default function AttendancePortalClient() {
                 <MapPin size={15} className="text-primary" /> Khu vực QR (để trống = Toàn KTX)
               </div>
               <div className="flex flex-wrap gap-3">
+                {/* KTX field */}
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">Khu KTX</label>
-                  <input
-                    type="text"
-                    value={zoneKtx}
-                    onChange={e => setZoneKtx(e.target.value)}
-                    placeholder="VD: KTX 1, KTX A..."
-                    list="ktx-suggestions"
-                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[140px]"
-                  />
-                  <datalist id="ktx-suggestions">
-                    {ktxList.map(k => <option key={k} value={k} />)}
-                  </datalist>
+                  {!isManualKtx && ktxList.length > 0 ? (
+                    <select
+                      value={zoneKtx}
+                      onChange={e => {
+                        if (e.target.value === '__manual__') { setIsManualKtx(true); setZoneKtx(''); }
+                        else { setZoneKtx(e.target.value); setZoneDay(''); setZonePhong(''); setIsManualDay(false); setIsManualPhong(false); }
+                      }}
+                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[140px]"
+                    >
+                      <option value="">-- Toàn KTX --</option>
+                      {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+                      <option value="__manual__">✏ Khác / Nhập tay</option>
+                    </select>
+                  ) : (
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={zoneKtx}
+                        onChange={e => setZoneKtx(e.target.value)}
+                        placeholder="Nhập tên KTX..."
+                        autoFocus
+                        className="px-3 py-2 text-sm border border-primary rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[130px]"
+                      />
+                      {ktxList.length > 0 && (
+                        <button onClick={() => { setIsManualKtx(false); setZoneKtx(''); }} title="Quay lại chọn" className="px-2 py-1 border border-border rounded-lg text-xs text-muted-foreground hover:bg-muted">↩</button>
+                      )}
+                    </div>
+                  )}
                 </div>
+                {/* Dãy field */}
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">Dãy nhà</label>
-                  <input
-                    type="text"
-                    value={zoneDay}
-                    onChange={e => setZoneDay(e.target.value)}
-                    placeholder="VD: A, B, 1, 2..."
-                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
-                  />
+                  {!isManualDay && dayList.length > 0 ? (
+                    <select
+                      value={zoneDay}
+                      onChange={e => {
+                        if (e.target.value === '__manual__') { setIsManualDay(true); setZoneDay(''); }
+                        else { setZoneDay(e.target.value); setZonePhong(''); setIsManualPhong(false); }
+                      }}
+                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
+                    >
+                      <option value="">-- Tất cả Dãy --</option>
+                      {dayList.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                      <option value="__manual__">✏ Khác / Nhập tay</option>
+                    </select>
+                  ) : (
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={zoneDay}
+                        onChange={e => setZoneDay(e.target.value)}
+                        placeholder="VD: A, B, 1..."
+                        autoFocus={isManualDay}
+                        className="px-3 py-2 text-sm border border-primary rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[110px]"
+                      />
+                      {dayList.length > 0 && (
+                        <button onClick={() => { setIsManualDay(false); setZoneDay(''); }} title="Quay lại chọn" className="px-2 py-1 border border-border rounded-lg text-xs text-muted-foreground hover:bg-muted">↩</button>
+                      )}
+                    </div>
+                  )}
                 </div>
+                {/* Phòng field */}
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">Phòng cụ thể</label>
-                  <input
-                    type="text"
-                    value={zonePhong}
-                    onChange={e => setZonePhong(e.target.value)}
-                    placeholder="VD: 101, 202..."
-                    className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
-                  />
+                  {!isManualPhong && phongList.length > 0 ? (
+                    <select
+                      value={zonePhong}
+                      onChange={e => {
+                        if (e.target.value === '__manual__') { setIsManualPhong(true); setZonePhong(''); }
+                        else setZonePhong(e.target.value);
+                      }}
+                      className="px-3 py-2 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[120px]"
+                    >
+                      <option value="">-- Tất cả Phòng --</option>
+                      {phongList.map(p => <option key={p} value={p}>Phòng {p}</option>)}
+                      <option value="__manual__">✏ Khác / Nhập tay</option>
+                    </select>
+                  ) : (
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={zonePhong}
+                        onChange={e => setZonePhong(e.target.value)}
+                        placeholder="VD: 101, 202..."
+                        autoFocus={isManualPhong}
+                        className="px-3 py-2 text-sm border border-primary rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[110px]"
+                      />
+                      {phongList.length > 0 && (
+                        <button onClick={() => { setIsManualPhong(false); setZonePhong(''); }} title="Quay lại chọn" className="px-2 py-1 border border-border rounded-lg text-xs text-muted-foreground hover:bg-muted">↩</button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="text-xs text-muted-foreground">
@@ -1067,13 +1171,57 @@ export default function AttendancePortalClient() {
                                     </button>
                                   ) : (
                                     <div className="flex flex-wrap gap-1.5 items-center mt-1">
-                                      <input type="text" value={editLocKtx} onChange={e => setEditLocKtx(e.target.value)} placeholder="KTX" list="ktx-suggestions-loc"
-                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" />
-                                      <datalist id="ktx-suggestions-loc">{ktxList.map(k => <option key={k} value={k} />)}</datalist>
-                                      <input type="text" value={editLocDay} onChange={e => setEditLocDay(e.target.value)} placeholder="Dãy"
-                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
-                                      <input type="text" value={editLocPhong} onChange={e => setEditLocPhong(e.target.value)} placeholder="Phòng"
-                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                      {/* KTX */}
+                                      {!isManualLocKtx && ktxList.length > 0 ? (
+                                        <select value={editLocKtx} onChange={e => { if (e.target.value === '__manual__') { setIsManualLocKtx(true); setEditLocKtx(''); } else { setEditLocKtx(e.target.value); setEditLocDay(''); setEditLocPhong(''); setIsManualLocDay(false); setIsManualLocPhong(false); } }}
+                                          className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-28">
+                                          <option value="">-- KTX --</option>
+                                          {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+                                          <option value="__manual__">✏ Nhập tay</option>
+                                        </select>
+                                      ) : (
+                                        <div className="flex gap-0.5">
+                                          <input type="text" value={editLocKtx} onChange={e => setEditLocKtx(e.target.value)} placeholder="KTX"
+                                            className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" autoFocus={isManualLocKtx} />
+                                          {ktxList.length > 0 && <button onClick={() => { setIsManualLocKtx(false); setEditLocKtx(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                        </div>
+                                      )}
+                                      {/* Dãy */}
+                                      {(() => {
+                                        const locDayList = editLocKtx && !isManualLocKtx ? Array.from(new Set(allWorkers.filter(w => w.ktx === editLocKtx && w.day).map(w => w.day))).sort() : [];
+                                        return !isManualLocDay && locDayList.length > 0 ? (
+                                          <select value={editLocDay} onChange={e => { if (e.target.value === '__manual__') { setIsManualLocDay(true); setEditLocDay(''); } else { setEditLocDay(e.target.value); setEditLocPhong(''); setIsManualLocPhong(false); } }}
+                                            className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24">
+                                            <option value="">-- Dãy --</option>
+                                            {locDayList.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                                            <option value="__manual__">✏ Nhập tay</option>
+                                          </select>
+                                        ) : (
+                                          <div className="flex gap-0.5">
+                                            <input type="text" value={editLocDay} onChange={e => setEditLocDay(e.target.value)} placeholder="Dãy"
+                                              className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" autoFocus={isManualLocDay} />
+                                            {locDayList.length > 0 && <button onClick={() => { setIsManualLocDay(false); setEditLocDay(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                          </div>
+                                        );
+                                      })()}
+                                      {/* Phòng */}
+                                      {(() => {
+                                        const locPhongList = editLocKtx && editLocDay && !isManualLocDay ? Array.from(new Set(allWorkers.filter(w => w.ktx === editLocKtx && w.day === editLocDay && w.phong_so).map(w => w.phong_so))).sort() : [];
+                                        return !isManualLocPhong && locPhongList.length > 0 ? (
+                                          <select value={editLocPhong} onChange={e => { if (e.target.value === '__manual__') { setIsManualLocPhong(true); setEditLocPhong(''); } else setEditLocPhong(e.target.value); }}
+                                            className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24">
+                                            <option value="">-- Phòng --</option>
+                                            {locPhongList.map(p => <option key={p} value={p}>Phòng {p}</option>)}
+                                            <option value="__manual__">✏ Nhập tay</option>
+                                          </select>
+                                        ) : (
+                                          <div className="flex gap-0.5">
+                                            <input type="text" value={editLocPhong} onChange={e => setEditLocPhong(e.target.value)} placeholder="Phòng"
+                                              className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" autoFocus={isManualLocPhong} />
+                                            {locPhongList.length > 0 && <button onClick={() => { setIsManualLocPhong(false); setEditLocPhong(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                          </div>
+                                        );
+                                      })()}
                                       <button onClick={() => saveLocation(rec.id)} disabled={savingLocation}
                                         className="flex items-center gap-1 px-2 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50">
                                         {savingLocation ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />} Lưu
@@ -1176,13 +1324,57 @@ export default function AttendancePortalClient() {
                                   </div>
                                 ) : (
                                   <div className="flex flex-wrap gap-1.5 items-center mt-1.5">
-                                    <input type="text" value={editAbsentKtx} onChange={e => setEditAbsentKtx(e.target.value)} placeholder="KTX" list="ktx-suggestions-absent"
-                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" />
-                                    <datalist id="ktx-suggestions-absent">{ktxList.map(k => <option key={k} value={k} />)}</datalist>
-                                    <input type="text" value={editAbsentDay} onChange={e => setEditAbsentDay(e.target.value)} placeholder="Dãy"
-                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
-                                    <input type="text" value={editAbsentPhong} onChange={e => setEditAbsentPhong(e.target.value)} placeholder="Phòng"
-                                      className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" />
+                                    {/* KTX */}
+                                    {!isManualAbsKtx && ktxList.length > 0 ? (
+                                      <select value={editAbsentKtx} onChange={e => { if (e.target.value === '__manual__') { setIsManualAbsKtx(true); setEditAbsentKtx(''); } else { setEditAbsentKtx(e.target.value); setEditAbsentDay(''); setEditAbsentPhong(''); setIsManualAbsDay(false); setIsManualAbsPhong(false); } }}
+                                        className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-28">
+                                        <option value="">-- KTX --</option>
+                                        {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+                                        <option value="__manual__">✏ Nhập tay</option>
+                                      </select>
+                                    ) : (
+                                      <div className="flex gap-0.5">
+                                        <input type="text" value={editAbsentKtx} onChange={e => setEditAbsentKtx(e.target.value)} placeholder="KTX"
+                                          className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24" autoFocus={isManualAbsKtx} />
+                                        {ktxList.length > 0 && <button onClick={() => { setIsManualAbsKtx(false); setEditAbsentKtx(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                      </div>
+                                    )}
+                                    {/* Dãy */}
+                                    {(() => {
+                                      const absDayList = editAbsentKtx && !isManualAbsKtx ? Array.from(new Set(allWorkers.filter(w => w.ktx === editAbsentKtx && w.day).map(w => w.day))).sort() : [];
+                                      return !isManualAbsDay && absDayList.length > 0 ? (
+                                        <select value={editAbsentDay} onChange={e => { if (e.target.value === '__manual__') { setIsManualAbsDay(true); setEditAbsentDay(''); } else { setEditAbsentDay(e.target.value); setEditAbsentPhong(''); setIsManualAbsPhong(false); } }}
+                                          className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24">
+                                          <option value="">-- Dãy --</option>
+                                          {absDayList.map(d => <option key={d} value={d}>Dãy {d}</option>)}
+                                          <option value="__manual__">✏ Nhập tay</option>
+                                        </select>
+                                      ) : (
+                                        <div className="flex gap-0.5">
+                                          <input type="text" value={editAbsentDay} onChange={e => setEditAbsentDay(e.target.value)} placeholder="Dãy"
+                                            className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" autoFocus={isManualAbsDay} />
+                                          {absDayList.length > 0 && <button onClick={() => { setIsManualAbsDay(false); setEditAbsentDay(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                        </div>
+                                      );
+                                    })()}
+                                    {/* Phòng */}
+                                    {(() => {
+                                      const absPhongList = editAbsentKtx && editAbsentDay && !isManualAbsDay ? Array.from(new Set(allWorkers.filter(w => w.ktx === editAbsentKtx && w.day === editAbsentDay && w.phong_so).map(w => w.phong_so))).sort() : [];
+                                      return !isManualAbsPhong && absPhongList.length > 0 ? (
+                                        <select value={editAbsentPhong} onChange={e => { if (e.target.value === '__manual__') { setIsManualAbsPhong(true); setEditAbsentPhong(''); } else setEditAbsentPhong(e.target.value); }}
+                                          className="px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-24">
+                                          <option value="">-- Phòng --</option>
+                                          {absPhongList.map(p => <option key={p} value={p}>Phòng {p}</option>)}
+                                          <option value="__manual__">✏ Nhập tay</option>
+                                        </select>
+                                      ) : (
+                                        <div className="flex gap-0.5">
+                                          <input type="text" value={editAbsentPhong} onChange={e => setEditAbsentPhong(e.target.value)} placeholder="Phòng"
+                                            className="px-2 py-1 text-xs border border-primary rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-20" autoFocus={isManualAbsPhong} />
+                                          {absPhongList.length > 0 && <button onClick={() => { setIsManualAbsPhong(false); setEditAbsentPhong(''); }} className="px-1 text-xs border border-border rounded text-muted-foreground hover:bg-muted">↩</button>}
+                                        </div>
+                                      );
+                                    })()}
                                     <button onClick={() => saveAbsentLocation(w.id)} disabled={savingAbsent}
                                       className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs font-medium hover:opacity-90 disabled:opacity-50">
                                       {savingAbsent ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />} Lưu
