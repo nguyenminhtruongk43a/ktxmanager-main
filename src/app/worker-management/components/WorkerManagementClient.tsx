@@ -1014,6 +1014,9 @@ function AssignBedFromWorkerModal({
   const [assigning, setAssigning] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'empty' | 'occupied'>('empty');
+  const [filterKtx, setFilterKtx] = useState('');
+  const [filterDay, setFilterDay] = useState('');
+  const [filterPhong, setFilterPhong] = useState('');
   const supabase = createClient();
 
   useEffect(() => {
@@ -1028,15 +1031,32 @@ function AssignBedFromWorkerModal({
     load();
   }, []);
 
+  // Cascade filter lists
+  const ktxList = Array.from(new Set(beds.map(b => b.ktx).filter(Boolean))).sort();
+  const dayList = Array.from(new Set(
+    beds.filter(b => !filterKtx || b.ktx === filterKtx).map(b => b.day).filter(Boolean)
+  )).sort();
+  const phongList = Array.from(new Set(
+    beds.filter(b => (!filterKtx || b.ktx === filterKtx) && (!filterDay || b.day === filterDay))
+      .map(b => b.phong_so).filter(Boolean)
+  )).sort((a, b) => Number(a) - Number(b));
+
   const filtered = beds.filter(b => {
     if (filterStatus !== 'all' && b.status !== filterStatus) return false;
+    if (filterKtx && b.ktx !== filterKtx) return false;
+    if (filterDay && b.day !== filterDay) return false;
+    if (filterPhong && b.phong_so !== filterPhong) return false;
     if (search) {
       const q = search.toLowerCase();
       return b.phong_so?.toLowerCase().includes(q) || b.giuong?.toLowerCase().includes(q) ||
-        b.ktx?.toLowerCase().includes(q) || b.day?.toLowerCase().includes(q);
+        b.ktx?.toLowerCase().includes(q) || b.day?.toLowerCase().includes(q) ||
+        b.ho_va_ten?.toLowerCase().includes(q) || b.ma_nv?.toLowerCase().includes(q);
     }
     return true;
   });
+
+  const emptyCount = filtered.filter(b => b.status === 'empty').length;
+  const hasFilters = filterKtx || filterDay || filterPhong || search || filterStatus !== 'empty';
 
   const handleAssign = async (bed: typeof beds[0]) => {
     setAssigning(bed.id);
@@ -1055,11 +1075,16 @@ function AssignBedFromWorkerModal({
       // Assign bed to this worker
       await supabase.from('beds').update({
         ma_nv: worker.maNV, ho_va_ten: worker.hoVaTen, status: 'occupied', assigned_at: now,
+        pending_status: null, temp_identifier: null,
       }).eq('id', bed.id);
-      // Update worker profile (two-way sync)
-      await supabase.from('workers').update({
+      // Update worker profile (two-way sync) — use both id and ma_nv for reliability
+      const updatePayload = {
         ktx: bed.ktx, day: bed.day, phong_so: bed.phong_so, giuong: bed.giuong, worker_status: 'active',
-      }).eq('id', worker.id);
+      };
+      await supabase.from('workers').update(updatePayload).eq('id', worker.id);
+      if (worker.maNV) {
+        await supabase.from('workers').update(updatePayload).eq('ma_nv', worker.maNV);
+      }
       // Log history
       await supabase.from('bed_history').insert([{
         bed_id: bed.id, bed_qr_id: bed.bed_qr_id, ktx: bed.ktx, day: bed.day,
@@ -1085,29 +1110,81 @@ function AssignBedFromWorkerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between p-5 border-b border-border flex-shrink-0">
           <div>
             <h3 className="font-semibold text-foreground">Gán giường cho nhân sự</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               {worker.hoVaTen} · Mã NV: {worker.maNV || '—'}
+              {(worker.ktx || worker.day || worker.phongSo) && (
+                <span className="ml-2 text-emerald-600">
+                  · Hiện tại: {[worker.ktx, worker.day, worker.phongSo ? `P.${worker.phongSo}` : '', worker.giuong ? `G.${worker.giuong}` : ''].filter(Boolean).join(' ')}
+                </span>
+              )}
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><X size={18} /></button>
         </div>
-        <div className="p-4 border-b border-border flex-shrink-0 flex gap-2">
-          <div className="relative flex-1">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input type="text" placeholder="Tìm phòng, dãy, giường..." value={search} onChange={e => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+
+        {/* Smart cascade filters */}
+        <div className="p-4 border-b border-border flex-shrink-0 space-y-2">
+          {/* Row 1: KTX → Dãy → Phòng cascade */}
+          <div className="flex gap-2">
+            <select
+              value={filterKtx}
+              onChange={e => { setFilterKtx(e.target.value); setFilterDay(''); setFilterPhong(''); }}
+              className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Tất cả KTX</option>
+              {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <select
+              value={filterDay}
+              onChange={e => { setFilterDay(e.target.value); setFilterPhong(''); }}
+              disabled={!filterKtx}
+              className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+            >
+              <option value="">Tất cả Dãy</option>
+              {dayList.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select
+              value={filterPhong}
+              onChange={e => setFilterPhong(e.target.value)}
+              disabled={!filterDay}
+              className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+            >
+              <option value="">Tất cả Phòng</option>
+              {phongList.map(p => <option key={p} value={p}>P.{p}</option>)}
+            </select>
           </div>
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)}
-            className="px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none">
-            <option value="all">Tất cả</option>
-            <option value="empty">Giường trống</option>
-            <option value="occupied">Đang có người</option>
-          </select>
+          {/* Row 2: Search + Status filter */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input type="text" placeholder="Tìm phòng, dãy, giường, tên..." value={search} onChange={e => setSearch(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            </div>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)}
+              className="px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none">
+              <option value="all">Tất cả</option>
+              <option value="empty">Giường trống</option>
+              <option value="occupied">Đang có người</option>
+            </select>
+            {hasFilters && (
+              <button
+                onClick={() => { setSearch(''); setFilterKtx(''); setFilterDay(''); setFilterPhong(''); setFilterStatus('empty'); }}
+                className="px-2 py-1.5 text-xs border border-border rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+                title="Xóa bộ lọc"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {filtered.length} giường · <span className="text-emerald-600 font-medium">{emptyCount} trống</span>
+          </p>
         </div>
+
         <div className="flex-1 overflow-y-auto p-2">
           {loading ? (
             <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -1118,7 +1195,7 @@ function AssignBedFromWorkerModal({
               <div key={b.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-muted/60 transition-colors">
                 <div>
                   <div className="flex items-center gap-2">
-                    <BedDouble size={14} className="text-blue-600" />
+                    <BedDouble size={14} className={b.status === 'empty' ? 'text-emerald-600' : 'text-amber-500'} />
                     <p className="text-sm font-semibold text-foreground">
                       {b.ktx} · {b.day} · Phòng {b.phong_so} · Giường {b.giuong}
                     </p>

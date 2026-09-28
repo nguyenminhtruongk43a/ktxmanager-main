@@ -61,6 +61,8 @@ function AssignWorkerModal({
 }) {
   const [tab, setTab] = useState<'search' | 'pending'>('search');
   const [search, setSearch] = useState('');
+  const [filterDonVi, setFilterDonVi] = useState('');
+  const [filterToTruong, setFilterToTruong] = useState('');
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState(false);
@@ -73,7 +75,7 @@ function AssignWorkerModal({
       setLoading(true);
       const { data } = await supabase
         .from('workers')
-        .select('id, ho_va_ten, ma_nv, ktx, day, phong_so, giuong, worker_status, don_vi')
+        .select('id, ho_va_ten, ma_nv, ktx, day, phong_so, giuong, worker_status, don_vi, to_truong')
         .or('worker_status.eq.active,worker_status.is.null')
         .order('ho_va_ten');
       setWorkers((data || []) as WorkerOption[]);
@@ -82,13 +84,21 @@ function AssignWorkerModal({
     load();
   }, []);
 
+  // Unique lists for filter dropdowns
+  const donViList = Array.from(new Set(workers.map(w => w.don_vi).filter(Boolean))).sort() as string[];
+  const toTruongList = Array.from(new Set(workers.map((w: any) => w.to_truong).filter(Boolean))).sort() as string[];
+
   const filtered = workers.filter(w => {
     const q = search.toLowerCase();
-    return (
+    const matchSearch = !q || (
       w.ho_va_ten?.toLowerCase().includes(q) ||
       w.ma_nv?.toLowerCase().includes(q) ||
-      w.don_vi?.toLowerCase().includes(q)
+      w.don_vi?.toLowerCase().includes(q) ||
+      (w as any).to_truong?.toLowerCase().includes(q)
     );
+    const matchDonVi = !filterDonVi || w.don_vi === filterDonVi;
+    const matchToTruong = !filterToTruong || (w as any).to_truong === filterToTruong;
+    return matchSearch && matchDonVi && matchToTruong;
   });
 
   const handleAssign = async (w: WorkerOption) => {
@@ -102,6 +112,8 @@ function AssignWorkerModal({
     try { await onAssignPending(bed, tempId.trim() || `CHO-${Date.now()}`, tempName.trim()); onClose(); }
     finally { setAssigning(false); }
   };
+
+  const hasFilters = filterDonVi || filterToTruong || search;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -129,13 +141,44 @@ function AssignWorkerModal({
 
         {tab === 'search' ? (
           <>
-            <div className="p-4 border-b border-border flex-shrink-0">
+            {/* Smart filters */}
+            <div className="p-4 border-b border-border flex-shrink-0 space-y-2">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input type="text" placeholder="Tìm theo tên, Mã NV, đơn vị..."
+                <input type="text" placeholder="Tìm theo tên, Mã NV, đơn vị, tổ trưởng..."
                   value={search} onChange={e => setSearch(e.target.value)}
                   className="w-full pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" autoFocus />
               </div>
+              <div className="flex gap-2">
+                <select
+                  value={filterDonVi}
+                  onChange={e => setFilterDonVi(e.target.value)}
+                  className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">Tất cả Đơn vị</option>
+                  {donViList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select
+                  value={filterToTruong}
+                  onChange={e => setFilterToTruong(e.target.value)}
+                  className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">Tất cả Tổ trưởng</option>
+                  {toTruongList.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {hasFilters && (
+                  <button
+                    onClick={() => { setSearch(''); setFilterDonVi(''); setFilterToTruong(''); }}
+                    className="px-2 py-1.5 text-xs border border-border rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+                    title="Xóa bộ lọc"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {filtered.length} nhân sự {hasFilters ? '(đã lọc)' : 'trong danh sách'}
+              </p>
             </div>
             <div className="flex-1 overflow-y-auto p-2">
               {loading ? (
@@ -151,6 +194,7 @@ function AssignWorkerModal({
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Mã NV: <span className="font-mono font-medium">{w.ma_nv || '—'}</span>
                         {w.don_vi && <span className="ml-2 text-blue-600">· {w.don_vi}</span>}
+                        {(w as any).to_truong && <span className="ml-2 text-purple-600">· TT: {(w as any).to_truong}</span>}
                         {w.ktx && <span className="ml-2 text-emerald-600">· {w.ktx}</span>}
                       </p>
                     </div>

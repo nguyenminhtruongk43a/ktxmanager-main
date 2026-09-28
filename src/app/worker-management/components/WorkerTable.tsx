@@ -165,11 +165,21 @@ export default function WorkerTable({
                   className="rounded border-border"
                 />
               </th>
-              {['STT','Họ và Tên','Mã NV','TD','KTX','Dãy','Phòng','Giường','SĐT','CCCD','Tỉnh/TP','Tổ Trưởng','Ngày Vào','Số Ngày'].map((label, i) => (
-                <th key={`th-${i}`} className="table-header cursor-pointer" onClick={() => onSort(COLUMNS[i]?.key ?? 'stt')}>
-                  <div className="flex items-center gap-1">{label}<SortIcon col={COLUMNS[i]?.key ?? 'stt'} /></div>
-                </th>
-              ))}
+              {['STT','Họ và Tên','Mã NV','TD','SĐT','CCCD','Tỉnh/TP','Tổ Trưởng','Ngày Vào','Số Ngày'].map((label, i) => {
+                const colKeys: (keyof Worker)[] = ['stt','hoVaTen','maNV','tieuDoan','soDienThoai','cccd','hoKhauTinh','toTruong','ngayVaoKTX','ngayVaoKTX'];
+                return (
+                  <th key={`th-${i}`} className="table-header cursor-pointer" onClick={() => onSort(colKeys[i] ?? 'stt')}>
+                    <div className="flex items-center gap-1">{label}<SortIcon col={colKeys[i] ?? 'stt'} /></div>
+                  </th>
+                );
+              })}
+              {/* Vị trí / Giường column */}
+              <th className="table-header min-w-[160px]">
+                <div className="flex items-center gap-1">
+                  <BedDouble size={12} className="text-blue-500" />
+                  Vị trí / Giường
+                </div>
+              </th>
               <th className="table-header w-24">Tạm trú</th>
               <th className="table-header w-28 text-right">Thao tác</th>
             </tr>
@@ -178,8 +188,8 @@ export default function WorkerTable({
             {workers.map((w, idx) => {
               const isSelected = selectedIds.has(w.id);
               const soNgay = calcSoNgay(w.ngayVaoKTX, w.ngayRaKTX);
-              // Sequential STT: rowOffset + idx + 1 (renumbers from 1 when filtered)
               const displayStt = rowOffset + idx + 1;
+              const hasLocation = w.ktx || w.day || w.phongSo || w.giuong;
               return (
                 <tr
                   key={w.id}
@@ -210,12 +220,6 @@ export default function WorkerTable({
                   </td>
                   <td className="table-cell"><MaNVCell value={w.maNV} /></td>
                   <td className="table-cell"><PlatoonBadge value={w.tieuDoan} /></td>
-                  <td className="table-cell"><span className="text-xs text-foreground">{w.ktx || '—'}</span></td>
-                  <td className="table-cell"><span className="text-xs font-semibold text-foreground">{w.day}</span></td>
-                  <td className="table-cell">
-                    <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-primary/10 text-primary text-xs font-bold">{w.phongSo}</span>
-                  </td>
-                  <td className="table-cell"><span className="text-xs font-tabular text-muted-foreground">{w.giuong || '—'}</span></td>
                   <td className="table-cell"><span className="text-xs font-tabular text-foreground">{w.soDienThoai || '—'}</span></td>
                   <td className="table-cell"><CCCDCell value={w.cccd} /></td>
                   <td className="table-cell"><span className="text-xs text-foreground truncate max-w-[120px] block">{w.hoKhauTinh || '—'}</span></td>
@@ -225,6 +229,32 @@ export default function WorkerTable({
                     {soNgay !== null ? (
                       <span className={`text-xs font-tabular font-semibold ${soNgay <= 7 ? 'text-green-600' : 'text-foreground'}`}>{soNgay}n</span>
                     ) : <span className="text-muted-foreground text-xs">—</span>}
+                  </td>
+                  {/* Vị trí / Giường cell with quick-assign button */}
+                  <td className="table-cell" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-1.5">
+                      {hasLocation ? (
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-emerald-700 leading-tight">
+                            {[w.ktx, w.day].filter(Boolean).join(' · ')}
+                          </span>
+                          <span className="text-xs text-muted-foreground leading-tight">
+                            {[w.phongSo ? `P.${w.phongSo}` : '', w.giuong ? `G.${w.giuong}` : ''].filter(Boolean).join(' ')}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">Chưa có giường</span>
+                      )}
+                      {onAssignBed && (
+                        <button
+                          onClick={() => onAssignBed(w)}
+                          title={hasLocation ? 'Đổi giường' : 'Gán giường'}
+                          className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${hasLocation ? 'hover:bg-blue-50 text-blue-400 hover:text-blue-600' : 'hover:bg-emerald-50 text-muted-foreground hover:text-emerald-600'}`}
+                        >
+                          <BedDouble size={13} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="table-cell" onClick={e => e.stopPropagation()}>
                     <TamTruTag worker={w} onToggle={onToggleTamTru} />
@@ -236,11 +266,6 @@ export default function WorkerTable({
                         <button onClick={() => onEdit(w)} title="Sửa" className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-primary transition-colors"><Pencil size={14} /></button>
                       ) : (
                         <button disabled title="Không có quyền sửa tổ hợp KTX + Dãy này" className="p-1.5 rounded-lg text-muted-foreground/30 cursor-not-allowed"><Pencil size={14} /></button>
-                      )}
-                      {onAssignBed && (
-                        <button onClick={() => onAssignBed(w)} title="Gán giường" className="p-1.5 rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors">
-                          <BedDouble size={14} />
-                        </button>
                       )}
                       {onDelete && (
                         (!canWriteBlock || canWriteBlock(w.day, w.ktx)) ? (
