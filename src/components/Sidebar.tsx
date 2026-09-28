@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 
 import {
   LayoutDashboard, Users, ChevronLeft, ChevronRight, LogOut, BarChart2,
-  ClipboardList, UserCog, RefreshCw, Building2, QrCode, Menu, X
+  ClipboardList, UserCog, RefreshCw, Building2, QrCode, Menu, X, BedDouble
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useWorkers } from '@/context/WorkerContext';
@@ -26,6 +26,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'nav-dashboard', label: 'Tổng Quan', href: '/', icon: LayoutDashboard, group: 'main' },
   { id: 'nav-report', label: 'Báo Cáo Biến Động', href: '/report-dashboard', icon: BarChart2, group: 'main' },
   { id: 'nav-workers', label: 'Quản Lý Công Nhân', href: '/worker-management', icon: Users, dynamicBadge: true, group: 'main' },
+  { id: 'nav-beds', label: 'Quản Lý Giường & QR', href: '/bed-management', icon: BedDouble, group: 'main' },
   { id: 'nav-facilities', label: 'Cơ Sở Vật Chất', href: '/facilities', icon: Building2, group: 'main' },
   { id: 'nav-qr', label: 'QR Portal', href: '/qr-portal', icon: QrCode, group: 'main' },
   { id: 'nav-user-mgmt', label: 'Quản Lý Tài Khoản', href: '/user-management', icon: UserCog, adminOnly: true, group: 'admin' },

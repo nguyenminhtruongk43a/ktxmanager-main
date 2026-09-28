@@ -8,12 +8,13 @@ import WorkerFormModal from './WorkerFormModal';
 import WorkerDetailModal from './WorkerDetailModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import BulkActionBar from './BulkActionBar';
-import { Plus, Download, Upload, X, FileText, AlertCircle, FileCheck, ChevronLeft, ChevronRight, Trash2, Building2, CheckSquare, Filter } from 'lucide-react';
+import { Plus, Download, Upload, X, FileText, AlertCircle, FileCheck, ChevronLeft, ChevronRight, Trash2, Building2, CheckSquare, Filter, BedDouble, Search, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '@/context/AuthContext';
 import { useAudit } from '@/context/AuditContext';
 import { useWorkers } from '@/context/WorkerContext';
 import { useSearchParams } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 
 export interface FilterState {
   search: string;
@@ -995,6 +996,161 @@ function BulkDeleteByFilterModal({
   );
 }
 
+// ─── Assign Bed Modal (from worker list) ─────────────────────────────────────
+function AssignBedFromWorkerModal({
+  worker,
+  onClose,
+  onAssigned,
+}: {
+  worker: Worker;
+  onClose: () => void;
+  onAssigned: () => void;
+}) {
+  const [beds, setBeds] = useState<Array<{
+    id: string; ktx: string; day: string; phong_so: string; giuong: string;
+    bed_qr_id: string; ma_nv: string | null; ho_va_ten: string | null; status: string;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [assigning, setAssigning] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'empty' | 'occupied'>('empty');
+  const supabase = createClient();
+
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase
+        .from('beds')
+        .select('id, ktx, day, phong_so, giuong, bed_qr_id, ma_nv, ho_va_ten, status')
+        .order('ktx').order('day').order('phong_so').order('giuong');
+      setBeds(data || []);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const filtered = beds.filter(b => {
+    if (filterStatus !== 'all' && b.status !== filterStatus) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return b.phong_so?.toLowerCase().includes(q) || b.giuong?.toLowerCase().includes(q) ||
+        b.ktx?.toLowerCase().includes(q) || b.day?.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const handleAssign = async (bed: typeof beds[0]) => {
+    setAssigning(bed.id);
+    try {
+      const now = new Date().toISOString();
+      // If bed was occupied, clear old worker
+      if (bed.status === 'occupied' && bed.ma_nv) {
+        await supabase.from('workers').update({ ktx: '', day: '', phong_so: '', giuong: '' }).eq('ma_nv', bed.ma_nv);
+        await supabase.from('bed_history').insert([{
+          bed_id: bed.id, bed_qr_id: bed.bed_qr_id, ktx: bed.ktx, day: bed.day,
+          phong_so: bed.phong_so, giuong: bed.giuong, event_type: 'reassigned',
+          ma_nv: bed.ma_nv, ho_va_ten: bed.ho_va_ten, performed_by: 'Quản lý',
+          note: `Đổi sang ${worker.hoVaTen} (${worker.maNV})`, event_at: now,
+        }]);
+      }
+      // Assign bed to this worker
+      await supabase.from('beds').update({
+        ma_nv: worker.maNV, ho_va_ten: worker.hoVaTen, status: 'occupied', assigned_at: now,
+      }).eq('id', bed.id);
+      // Update worker profile (two-way sync)
+      await supabase.from('workers').update({
+        ktx: bed.ktx, day: bed.day, phong_so: bed.phong_so, giuong: bed.giuong, worker_status: 'active',
+      }).eq('id', worker.id);
+      // Log history
+      await supabase.from('bed_history').insert([{
+        bed_id: bed.id, bed_qr_id: bed.bed_qr_id, ktx: bed.ktx, day: bed.day,
+        phong_so: bed.phong_so, giuong: bed.giuong, event_type: 'assigned',
+        ma_nv: worker.maNV, ho_va_ten: worker.hoVaTen, performed_by: 'Quản lý',
+        note: 'Gán từ danh sách nhân sự', event_at: now,
+      }]);
+      // Audit log
+      await supabase.from('audit_logs').insert([{
+        account: 'Quản lý',
+        action: 'BED_ASSIGN',
+        detail: `Gán ${worker.hoVaTen} (${worker.maNV}) vào giường ${bed.giuong} — Phòng ${bed.phong_so} — ${bed.day} — ${bed.ktx}`,
+      }]);
+      toast.success(`Đã gán ${worker.hoVaTen} vào giường ${bed.giuong} — Phòng ${bed.phong_so}`);
+      onAssigned();
+      onClose();
+    } catch (e: any) {
+      toast.error(`Lỗi: ${e.message}`);
+    } finally {
+      setAssigning(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between p-5 border-b border-border flex-shrink-0">
+          <div>
+            <h3 className="font-semibold text-foreground">Gán giường cho nhân sự</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {worker.hoVaTen} · Mã NV: {worker.maNV || '—'}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><X size={18} /></button>
+        </div>
+        <div className="p-4 border-b border-border flex-shrink-0 flex gap-2">
+          <div className="relative flex-1">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input type="text" placeholder="Tìm phòng, dãy, giường..." value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+          </div>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)}
+            className="px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none">
+            <option value="all">Tất cả</option>
+            <option value="empty">Giường trống</option>
+            <option value="occupied">Đang có người</option>
+          </select>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
+          ) : filtered.length === 0 ? (
+            <p className="text-center text-sm text-muted-foreground py-8">Không tìm thấy giường phù hợp</p>
+          ) : (
+            filtered.slice(0, 100).map(b => (
+              <div key={b.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-muted/60 transition-colors">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <BedDouble size={14} className="text-blue-600" />
+                    <p className="text-sm font-semibold text-foreground">
+                      {b.ktx} · {b.day} · Phòng {b.phong_so} · Giường {b.giuong}
+                    </p>
+                  </div>
+                  {b.status === 'occupied' && b.ho_va_ten ? (
+                    <p className="text-xs text-amber-600 mt-0.5 ml-5">⚠ Đang có: {b.ho_va_ten} ({b.ma_nv})</p>
+                  ) : (
+                    <p className="text-xs text-emerald-600 mt-0.5 ml-5">✓ Giường trống</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleAssign(b)}
+                  disabled={assigning === b.id}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  {assigning === b.id ? <Loader2 size={12} className="animate-spin" /> : <BedDouble size={12} />}
+                  Gán
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="p-4 border-t border-border flex-shrink-0">
+          <p className="text-xs text-muted-foreground">
+            {filtered.length} giường · Chọn giường để gán cho <strong>{worker.hoVaTen}</strong>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkerManagementClient() {
   const { workers, loading, addWorker, updateWorker, deleteWorkers, deleteAllWorkers, importWorkers, updateTamTruStatus, bulkUpdateKtx, refreshWorkers } = useWorkers();
   const searchParams = useSearchParams();
@@ -1014,6 +1170,7 @@ export default function WorkerManagementClient() {
   const [deleteTarget, setDeleteTarget] = useState<Worker | Worker[] | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
+  const [assignBedWorker, setAssignBedWorker] = useState<Worker | null>(null);
 
   const { currentUser, canDeleteSingle, canBulkDelete, canDeleteAll, isAdmin, canWriteBlock } = useAuth();
   const { addLog } = useAudit();
@@ -1355,6 +1512,7 @@ export default function WorkerManagementClient() {
         onEdit={setEditingWorker}
         onDelete={canDeleteSingle ? w => setDeleteTarget(w) : undefined}
         onToggleTamTru={handleToggleTamTru}
+        onAssignBed={setAssignBedWorker}
         canWriteBlock={canWriteBlock}
         rowOffset={rowOffset}
       />
@@ -1391,6 +1549,13 @@ export default function WorkerManagementClient() {
       {showBulkAssignKtx && isAdmin && <BulkAssignKtxModal workers={workers} onClose={() => setShowBulkAssignKtx(false)} onAssign={handleBulkAssignKtx} />}
       {showDeleteAll && isAdmin && <DeleteAllConfirmModal onConfirm={handleDeleteAll} onClose={() => setShowDeleteAll(false)} loading={deleteAllLoading} />}
       {showBulkDeleteFilter && isAdmin && <BulkDeleteByFilterModal workers={workers} onClose={() => setShowBulkDeleteFilter(false)} onDelete={handleBulkDeleteByFilter} />}
+      {assignBedWorker && (
+        <AssignBedFromWorkerModal
+          worker={assignBedWorker}
+          onClose={() => setAssignBedWorker(null)}
+          onAssigned={refreshWorkers}
+        />
+      )}
     </div>
   );
 }

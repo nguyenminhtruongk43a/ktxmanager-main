@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { Worker, calcSoNgay, getProfileStatus } from '@/data/workers';
-import { Eye, Pencil, Trash2, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { Eye, Pencil, Trash2, ArrowUp, ArrowDown, ArrowUpDown, BedDouble } from 'lucide-react';
 
 interface Props {
   workers: Worker[];
@@ -15,6 +15,7 @@ interface Props {
   onEdit: (w: Worker) => void;
   onDelete?: (w: Worker) => void;
   onToggleTamTru?: (w: Worker) => void;
+  onAssignBed?: (w: Worker) => void;
   /** Optional: function to check if current user can write to a specific KTX+block combination */
   canWriteBlock?: (blockName: string, ktxName?: string) => boolean;
   /** Sequential row number offset for renumbering after filter (0-based index of first row) */
@@ -106,7 +107,7 @@ function TamTruTag({ worker, onToggle }: { worker: Worker; onToggle?: (w: Worker
 }
 
 export default function WorkerTable({
-  workers, sortKey, sortDir, onSort, selectedIds, onSelectChange, allIds, onView, onEdit, onDelete, onToggleTamTru, canWriteBlock, rowOffset = 0
+  workers, sortKey, sortDir, onSort, selectedIds, onSelectChange, allIds, onView, onEdit, onDelete, onToggleTamTru, onAssignBed, canWriteBlock, rowOffset = 0
 }: Props) {
   // allSelected: true only when ALL rows on current page are selected
   const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id));
@@ -235,6 +236,11 @@ export default function WorkerTable({
                         <button onClick={() => onEdit(w)} title="Sửa" className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-primary transition-colors"><Pencil size={14} /></button>
                       ) : (
                         <button disabled title="Không có quyền sửa tổ hợp KTX + Dãy này" className="p-1.5 rounded-lg text-muted-foreground/30 cursor-not-allowed"><Pencil size={14} /></button>
+                      )}
+                      {onAssignBed && (
+                        <button onClick={() => onAssignBed(w)} title="Gán giường" className="p-1.5 rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors">
+                          <BedDouble size={14} />
+                        </button>
                       )}
                       {onDelete && (
                         (!canWriteBlock || canWriteBlock(w.day, w.ktx)) ? (
