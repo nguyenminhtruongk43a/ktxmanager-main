@@ -8,7 +8,7 @@ import WorkerFormModal from './WorkerFormModal';
 import WorkerDetailModal from './WorkerDetailModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import BulkActionBar from './BulkActionBar';
-import { Plus, Download, Upload, X, FileText, AlertCircle, FileCheck, ChevronLeft, ChevronRight, Trash2, Building2, CheckSquare, Filter, BedDouble, Search, Loader2 } from 'lucide-react';
+import { Plus, Download, Upload, X, FileText, AlertCircle, FileCheck, ChevronLeft, ChevronRight, Trash2, Building2, CheckSquare, Filter, BedDouble, Search, Loader2, UserX, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '@/context/AuthContext';
 import { useAudit } from '@/context/AuditContext';
@@ -1151,6 +1151,164 @@ function AssignBedFromWorkerModal({
   );
 }
 
+// ─── Cựu Nhân Sự (Alumni) Tab Component ──────────────────────────────────────
+function CuuNhanSuTab() {
+  const [alumni, setAlumni] = useState<Array<{
+    id: string; ho_va_ten: string; ma_nv: string; don_vi: string;
+    ktx: string; day: string; phong_so: string; giuong: string;
+    ngay_ra_ktx: string; worker_status: string; cccd: string;
+    so_dien_thoai: string; ngay_sinh: string; ho_khau_tinh: string;
+    to_truong: string; sdt_to_truong: string;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [refreshing, setRefreshing] = useState(false);
+  const PAGE_SIZE = 50;
+  const supabase = createClient();
+
+  const fetchAlumni = async (silent = false) => {
+    if (!silent) setLoading(true); else setRefreshing(true);
+    try {
+      const { data } = await supabase
+        .from('workers')
+        .select('id, ho_va_ten, ma_nv, don_vi, ktx, day, phong_so, giuong, ngay_ra_ktx, worker_status, cccd, so_dien_thoai, ngay_sinh, ho_khau_tinh, to_truong, sdt_to_truong')
+        .eq('worker_status', 'left')
+        .order('ngay_ra_ktx', { ascending: false });
+      setAlumni((data || []) as any[]);
+    } finally { setLoading(false); setRefreshing(false); }
+  };
+
+  useEffect(() => { fetchAlumni(); }, []);
+
+  const filtered = alumni.filter(w => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return w.ho_va_ten?.toLowerCase().includes(q) || w.ma_nv?.toLowerCase().includes(q) || w.don_vi?.toLowerCase().includes(q);
+  });
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+  const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const handleExport = () => {
+    const rows = filtered.map((w, i) => ({
+      'STT': i + 1,
+      'Họ và Tên': w.ho_va_ten,
+      'Mã NV': w.ma_nv,
+      'Đơn vị': w.don_vi,
+      'CCCD': w.cccd,
+      'SĐT': w.so_dien_thoai,
+      'Ngày sinh': w.ngay_sinh,
+      'Hộ khẩu': w.ho_khau_tinh,
+      'KTX (cũ)': w.ktx,
+      'Dãy (cũ)': w.day,
+      'Phòng (cũ)': w.phong_so,
+      'Giường (cũ)': w.giuong,
+      'Ngày rời KTX': w.ngay_ra_ktx,
+      'Tổ trưởng': w.to_truong,
+      'SĐT Tổ trưởng': w.sdt_to_truong,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Cựu nhân sự');
+    XLSX.writeFile(wb, `cuu-nhan-su-${new Date().toLocaleDateString('vi-VN').replace(/\//g, '-')}.xlsx`);
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 size={24} className="animate-spin text-muted-foreground" /></div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input type="text" placeholder="Tìm theo tên, Mã NV, đơn vị..."
+            value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
+            className="w-full pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        </div>
+        <button onClick={() => fetchAlumni(true)} disabled={refreshing}
+          className="p-2 border border-border rounded-lg hover:bg-muted transition-colors text-muted-foreground disabled:opacity-50">
+          <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+        </button>
+        <button onClick={handleExport}
+          className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors text-muted-foreground">
+          <Download size={14} /> Xuất Excel
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 p-3 rounded-xl bg-orange-50 border border-orange-200">
+        <UserX size={16} className="text-orange-600 flex-shrink-0" />
+        <p className="text-sm text-orange-700">
+          <strong>{filtered.length}</strong> nhân sự đã rời KTX · Hồ sơ được lưu trữ để tra cứu và báo cáo
+        </p>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground">
+          <UserX size={40} className="mx-auto mb-3 opacity-30" />
+          <p className="text-sm font-medium">Chưa có nhân sự nào đã rời KTX</p>
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 border-b border-border">
+                <tr>
+                  {['STT', 'Họ và Tên', 'Mã NV', 'Đơn vị', 'Vị trí cũ', 'Ngày rời KTX', 'Tổ trưởng'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {pageRows.map((w, i) => (
+                  <tr key={w.id} className="hover:bg-muted/20 transition-colors">
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{(page - 1) * PAGE_SIZE + i + 1}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-foreground text-sm">{w.ho_va_ten}</p>
+                      <p className="text-xs text-muted-foreground">{w.cccd || '—'}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs font-mono text-foreground">{w.ma_nv || '—'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs text-foreground">{w.don_vi || '—'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="text-xs text-muted-foreground">
+                        {[w.ktx, w.day, w.phong_so ? `P.${w.phong_so}` : '', w.giuong ? `G.${w.giuong}` : ''].filter(Boolean).join(' · ') || '—'}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${w.ngay_ra_ktx ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {w.ngay_ra_ktx || 'Không rõ'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="text-xs text-foreground">{w.to_truong || '—'}</p>
+                      <p className="text-xs text-muted-foreground">{w.sdt_to_truong || ''}</p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {totalPages > 1 && (
+            <div className="px-4 py-3 border-t border-border flex items-center justify-between bg-muted/20">
+              <p className="text-xs text-muted-foreground">Hiển thị <strong>{pageRows.length}</strong> / {filtered.length}</p>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-1 rounded hover:bg-muted disabled:opacity-40"><ChevronLeft size={14} /></button>
+                <span className="text-xs text-muted-foreground px-2">{page} / {totalPages}</span>
+                <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="p-1 rounded hover:bg-muted disabled:opacity-40"><ChevronRight size={14} /></button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkerManagementClient() {
   const { workers, loading, addWorker, updateWorker, deleteWorkers, deleteAllWorkers, importWorkers, updateTamTruStatus, bulkUpdateKtx, refreshWorkers } = useWorkers();
   const searchParams = useSearchParams();
@@ -1171,6 +1329,7 @@ export default function WorkerManagementClient() {
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [assignBedWorker, setAssignBedWorker] = useState<Worker | null>(null);
+  const [activeTab, setActiveTab] = useState<'active' | 'alumni'>('active');
 
   const { currentUser, canDeleteSingle, canBulkDelete, canDeleteAll, isAdmin, canWriteBlock } = useAuth();
   const { addLog } = useAudit();
@@ -1492,53 +1651,80 @@ export default function WorkerManagementClient() {
         </div>
       </div>
 
-      <WorkerFilters filters={filters} onChange={f => { setFilters(f); setPage(1); }} workers={workers} />
-
-      <BulkActionBar
-        selectedCount={selectedIds.size}
-        onDelete={canBulkDelete ? () => setDeleteTarget(workers.filter(w => selectedIds.has(w.id))) : undefined}
-        onClear={() => setSelectedIds(new Set())}
-      />
-
-      <WorkerTable
-        workers={paginated}
-        sortKey={sortKey}
-        sortDir={sortDir}
-        onSort={handleSort}
-        selectedIds={selectedIds}
-        onSelectChange={setSelectedIds}
-        allIds={paginated.map(w => w.id)}
-        onView={setViewingWorker}
-        onEdit={setEditingWorker}
-        onDelete={canDeleteSingle ? w => setDeleteTarget(w) : undefined}
-        onToggleTamTru={handleToggleTamTru}
-        onAssignBed={setAssignBedWorker}
-        canWriteBlock={canWriteBlock}
-        rowOffset={rowOffset}
-      />
-
-      {/* Pagination */}
-      <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Hiển thị</span>
-          <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="input-field w-16 py-1 text-xs">
-            {[20, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <span>/ {filtered.length} bản ghi</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setPage(1)} disabled={page === 1} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">«</button>
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">‹</button>
-          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-            const p = Math.max(1, Math.min(totalPages - 4, page - 2)) + i;
-            return (
-              <button key={p} onClick={() => setPage(p)} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${page === p ? 'bg-primary text-primary-foreground' : 'btn-ghost'}`}>{p}</button>
-            );
-          })}
-          <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages || totalPages === 0} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">›</button>
-          <button onClick={() => setPage(totalPages)} disabled={page === totalPages || totalPages === 0} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">»</button>
-        </div>
+      {/* Tab Navigation */}
+      <div className="flex border-b border-border mb-5">
+        <button
+          onClick={() => setActiveTab('active')}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === 'active' ? 'text-primary border-primary' : 'text-muted-foreground border-transparent hover:text-foreground'}`}
+        >
+          <BedDouble size={15} />
+          Đang ở KTX
+          <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold ${activeTab === 'active' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+            {workers.length}
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('alumni')}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === 'alumni' ? 'text-orange-600 border-orange-500' : 'text-muted-foreground border-transparent hover:text-foreground'}`}
+        >
+          <UserX size={15} />
+          Cựu nhân sự / Đã rời KTX
+        </button>
       </div>
+
+      {activeTab === 'alumni' ? (
+        <CuuNhanSuTab />
+      ) : (
+        <>
+          <WorkerFilters filters={filters} onChange={f => { setFilters(f); setPage(1); }} workers={workers} />
+
+          <BulkActionBar
+            selectedCount={selectedIds.size}
+            onDelete={canBulkDelete ? () => setDeleteTarget(workers.filter(w => selectedIds.has(w.id))) : undefined}
+            onClear={() => setSelectedIds(new Set())}
+          />
+
+          <WorkerTable
+            workers={paginated}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={handleSort}
+            selectedIds={selectedIds}
+            onSelectChange={setSelectedIds}
+            allIds={paginated.map(w => w.id)}
+            onView={setViewingWorker}
+            onEdit={setEditingWorker}
+            onDelete={canDeleteSingle ? w => setDeleteTarget(w) : undefined}
+            onToggleTamTru={handleToggleTamTru}
+            onAssignBed={setAssignBedWorker}
+            canWriteBlock={canWriteBlock}
+            rowOffset={rowOffset}
+          />
+
+          {/* Pagination */}
+          <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Hiển thị</span>
+              <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="input-field w-16 py-1 text-xs">
+                {[20, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span>/ {filtered.length} bản ghi</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage(1)} disabled={page === 1} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">«</button>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">‹</button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                const p = Math.max(1, Math.min(totalPages - 4, page - 2)) + i;
+                return (
+                  <button key={p} onClick={() => setPage(p)} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${page === p ? 'bg-primary text-primary-foreground' : 'btn-ghost'}`}>{p}</button>
+                );
+              })}
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages || totalPages === 0} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">›</button>
+              <button onClick={() => setPage(totalPages)} disabled={page === totalPages || totalPages === 0} className="btn-ghost px-2 py-1 text-xs disabled:opacity-40">»</button>
+            </div>
+          </div>
+        </>
+      )}
 
       {showAddModal && <WorkerFormModal worker={null} onSave={handleSave} onClose={() => setShowAddModal(false)} allWorkers={workers} />}
       {editingWorker && <WorkerFormModal worker={editingWorker} onSave={handleSave} onClose={() => setEditingWorker(null)} allWorkers={workers} />}
