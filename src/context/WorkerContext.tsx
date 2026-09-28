@@ -30,6 +30,7 @@ function dbRowToWorker(row: Record<string, unknown>): Worker {
     khoaTraCuu: String(row.khoa_tra_cuu ?? ''),
     avatar: row.avatar ? String(row.avatar) : undefined,
     tamTruStatus: (row.tam_tru_status as 'registered' | 'unregistered') ?? 'unregistered',
+    workerStatus: (row.worker_status as 'active' | 'left') ?? 'active',
   };
 }
 
@@ -58,6 +59,7 @@ function workerToDbRow(w: Worker): Record<string, unknown> {
     khoa_tra_cuu: w.khoaTraCuu,
     avatar: w.avatar ?? '',
     tam_tru_status: w.tamTruStatus ?? 'unregistered',
+    worker_status: w.workerStatus ?? 'active',
   };
 }
 

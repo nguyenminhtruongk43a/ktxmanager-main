@@ -12,6 +12,18 @@ export interface Worker {
   ngaySinh?: string;
   queQuan?: string;
   cccd?: string;
+  soDienThoai?: string;
+  hoKhauTinh?: string;
+  toTruong?: string;
+  sdtToTruong?: string;
+  ngayVaoKTX?: string;
+  ngayRaKTX?: string;
+  ghiChu?: string;
+  khoaTraCuu?: string;
+  avatar?: string;
+  tamTruStatus?: 'registered' | 'unregistered';
+  giuong?: string;
+  workerStatus?: 'active' | 'left';
 }
 
 // 💥 DÁN DANH SÁCH CÔNG NHÂN THỰC TẾ CỦA BẠN VÀO MẢNG NÀY 💥
