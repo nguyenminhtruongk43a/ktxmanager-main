@@ -472,44 +472,68 @@ function ExcelImportModal({ onClose, onImport }: {
         const raw: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as unknown[][];
         if (!raw || raw.length < 2) { setParseError('File trống hoặc không đọc được.'); return; }
 
+        // Normalize: uppercase + collapse spaces
         const normalize = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+
+        // Strip Vietnamese diacritics for fuzzy matching
+        const stripDiacritics = (s: string) =>
+          s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').replace(/Đ/g, 'D');
+
+        // Combined key: normalized + diacritic-stripped
+        const key = (s: string) => stripDiacritics(normalize(s));
+
         const headerRow = (raw[0] as unknown[]).map(c => normalize(String(c)));
+        const headerKeys = headerRow.map(h => key(h));
+
+        // Find column index by checking if any alias matches (exact or contains)
         const find = (...names: string[]) => {
           for (const n of names) {
-            const idx = headerRow.findIndex(h => h.includes(normalize(n)));
+            const nKey = key(n);
+            // Exact match first
+            let idx = headerKeys.findIndex(h => h === nKey);
+            if (idx >= 0) return idx;
+            // Contains match
+            idx = headerKeys.findIndex(h => h.includes(nKey) || nKey.includes(h));
             if (idx >= 0) return idx;
           }
           return -1;
         };
 
-        const iKtx = find('KTX', 'KÝ TÚC XÁ');
-        const iDay = find('DÃY', 'DAY', 'DÃY NHÀ');
-        const iPhong = find('PHÒNG', 'PHONG', 'PHÒNG SỐ');
-        const iGiuong = find('GIƯỜNG', 'GIUONG', 'SỐ GIƯỜNG');
-        const iMaNv = find('MÃ NV', 'MA NV', 'MANV');
-        const iHoTen = find('HỌ VÀ TÊN', 'HO VA TEN', 'HỌ TÊN');
+        const iKtx   = find('KTX', 'KÝ TÚC XÁ', 'KY TUC XA', 'KHU KTX', 'KHU');
+        const iDay   = find('DÃY', 'DAY', 'DÃY NHÀ', 'DAY NHA', 'DÃY PHÒNG', 'DAY PHONG');
+        const iPhong = find('PHÒNG', 'PHONG', 'PHÒNG SỐ', 'PHONG SO', 'SỐ PHÒNG', 'SO PHONG', 'PHÒNG Ở', 'PHONG O');
+        const iGiuong = find('GIƯỜNG', 'GIUONG', 'SỐ GIƯỜNG', 'SO GIUONG', 'GIƯỜNG SỐ', 'GIUONG SO', 'BED', 'GIUONG_SO');
+        const iMaNv  = find('MÃ NV', 'MA NV', 'MANV', 'MÃ NHÂN VIÊN', 'MA NHAN VIEN', 'MÃ NV.', 'MÃ CB', 'MA CB', 'EMPLOYEE ID', 'EMP ID', 'MSNV');
+        const iHoTen = find('HỌ VÀ TÊN', 'HO VA TEN', 'HỌ TÊN', 'HO TEN', 'TÊN', 'TEN', 'FULL NAME', 'HỌ VÀ TÊN NV', 'HO VA TEN NV', 'HỌ & TÊN', 'HO & TEN');
 
         if (iKtx < 0 || iDay < 0 || iPhong < 0 || iGiuong < 0) {
-          setParseError('Không tìm thấy cột bắt buộc: KTX, Dãy, Phòng, Giường. Vui lòng kiểm tra tiêu đề cột.');
+          const missing: string[] = [];
+          if (iKtx < 0) missing.push('KTX');
+          if (iDay < 0) missing.push('Dãy');
+          if (iPhong < 0) missing.push('Phòng');
+          if (iGiuong < 0) missing.push('Giường / Số giường');
+          setParseError(`Không tìm thấy cột bắt buộc: ${missing.join(', ')}. Tiêu đề cột hiện tại: [${headerRow.join(' | ')}]`);
           return;
         }
 
         const parsed: ImportBedRow[] = [];
         for (let i = 1; i < raw.length; i++) {
           const row = raw[i] as unknown[];
-          const ktx = String(row[iKtx] ?? '').trim();
-          const day = String(row[iDay] ?? '').trim();
-          const phong = String(row[iPhong] ?? '').trim();
+          const ktx    = String(row[iKtx]    ?? '').trim();
+          const day    = String(row[iDay]    ?? '').trim();
+          const phong  = String(row[iPhong]  ?? '').trim();
           const giuong = String(row[iGiuong] ?? '').trim();
           if (!ktx || !day || !phong || !giuong) continue;
+          const maNv   = iMaNv  >= 0 ? String(row[iMaNv]  ?? '').trim() : undefined;
+          const hoTen  = iHoTen >= 0 ? String(row[iHoTen] ?? '').trim() : undefined;
           parsed.push({
             ktx, day, phong_so: phong, giuong,
-            ma_nv: iMaNv >= 0 ? String(row[iMaNv] ?? '').trim() : undefined,
-            ho_va_ten: iHoTen >= 0 ? String(row[iHoTen] ?? '').trim() : undefined,
+            ma_nv:    maNv   || undefined,
+            ho_va_ten: hoTen || undefined,
           });
         }
 
-        if (parsed.length === 0) { setParseError('Không tìm thấy dữ liệu hợp lệ.'); return; }
+        if (parsed.length === 0) { setParseError('Không tìm thấy dữ liệu hợp lệ. Hãy kiểm tra file có dữ liệu từ dòng 2 trở đi.'); return; }
         setRows(parsed);
       } catch (err) { setParseError(`Lỗi đọc file: ${err instanceof Error ? err.message : String(err)}`); }
     };
