@@ -1,9 +1,10 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { BedDouble, QrCode, Search, Plus, Trash2, X, Loader2, RefreshCw, Download, History, UserCheck, LogOut, ArrowLeftRight, Upload, Wand2, Clock, FileText, AlertCircle, ChevronLeft, ChevronRight, Link2 } from 'lucide-react';
+import { BedDouble, QrCode, Search, Plus, Trash2, X, Loader2, RefreshCw, Download, History, UserCheck, LogOut, ArrowLeftRight, Upload, Wand2, Clock, FileText, AlertCircle, ChevronLeft, ChevronRight, Link2, PackageOpen } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 
 interface Bed {
   id: string;
@@ -48,6 +49,7 @@ interface WorkerOption {
   giuong: string;
   worker_status?: string;
   don_vi?: string;
+  to_truong?: string;
 }
 
 // ─── Assign Worker Modal ──────────────────────────────────────────────────────
@@ -61,6 +63,8 @@ function AssignWorkerModal({
 }) {
   const [tab, setTab] = useState<'search' | 'pending'>('search');
   const [search, setSearch] = useState('');
+  const [filterKtx, setFilterKtx] = useState('');
+  const [filterDay, setFilterDay] = useState('');
   const [filterDonVi, setFilterDonVi] = useState('');
   const [filterToTruong, setFilterToTruong] = useState('');
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
@@ -85,8 +89,18 @@ function AssignWorkerModal({
   }, []);
 
   // Unique lists for filter dropdowns
+  const ktxList = Array.from(new Set(workers.map(w => w.ktx).filter(Boolean))).sort() as string[];
+  const dayList = Array.from(new Set(
+    workers.filter(w => !filterKtx || w.ktx === filterKtx).map(w => w.day).filter(Boolean)
+  )).sort() as string[];
   const donViList = Array.from(new Set(workers.map(w => w.don_vi).filter(Boolean))).sort() as string[];
-  const toTruongList = Array.from(new Set(workers.map((w: any) => w.to_truong).filter(Boolean))).sort() as string[];
+  const toTruongList = Array.from(new Set(workers.map(w => w.to_truong).filter(Boolean))).sort() as string[];
+
+  // Reset day filter when ktx changes
+  const handleKtxChange = (val: string) => {
+    setFilterKtx(val);
+    setFilterDay('');
+  };
 
   const filtered = workers.filter(w => {
     const q = search.toLowerCase();
@@ -94,11 +108,13 @@ function AssignWorkerModal({
       w.ho_va_ten?.toLowerCase().includes(q) ||
       w.ma_nv?.toLowerCase().includes(q) ||
       w.don_vi?.toLowerCase().includes(q) ||
-      (w as any).to_truong?.toLowerCase().includes(q)
+      w.to_truong?.toLowerCase().includes(q)
     );
+    const matchKtx = !filterKtx || w.ktx === filterKtx;
+    const matchDay = !filterDay || w.day === filterDay;
     const matchDonVi = !filterDonVi || w.don_vi === filterDonVi;
-    const matchToTruong = !filterToTruong || (w as any).to_truong === filterToTruong;
-    return matchSearch && matchDonVi && matchToTruong;
+    const matchToTruong = !filterToTruong || w.to_truong === filterToTruong;
+    return matchSearch && matchKtx && matchDay && matchDonVi && matchToTruong;
   });
 
   const handleAssign = async (w: WorkerOption) => {
@@ -113,11 +129,19 @@ function AssignWorkerModal({
     finally { setAssigning(false); }
   };
 
-  const hasFilters = filterDonVi || filterToTruong || search;
+  const hasFilters = filterKtx || filterDay || filterDonVi || filterToTruong || search;
+
+  const clearFilters = () => {
+    setSearch('');
+    setFilterKtx('');
+    setFilterDay('');
+    setFilterDonVi('');
+    setFilterToTruong('');
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between p-5 border-b border-border flex-shrink-0">
           <div>
             <h3 className="font-semibold text-foreground">Gán nhân sự vào giường</h3>
@@ -143,12 +167,34 @@ function AssignWorkerModal({
           <>
             {/* Smart filters */}
             <div className="p-4 border-b border-border flex-shrink-0 space-y-2">
+              {/* Search box */}
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input type="text" placeholder="Tìm theo tên, Mã NV, đơn vị, tổ trưởng..."
+                <input type="text" placeholder="Tìm theo tên, Mã NV..."
                   value={search} onChange={e => setSearch(e.target.value)}
                   className="w-full pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30" autoFocus />
               </div>
+              {/* Row 1: KTX + Dãy */}
+              <div className="flex gap-2">
+                <select
+                  value={filterKtx}
+                  onChange={e => handleKtxChange(e.target.value)}
+                  className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">Tất cả KTX</option>
+                  {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <select
+                  value={filterDay}
+                  onChange={e => setFilterDay(e.target.value)}
+                  disabled={!filterKtx}
+                  className="flex-1 px-3 py-1.5 text-xs border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+                >
+                  <option value="">Tất cả dãy</option>
+                  {dayList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              {/* Row 2: Đơn vị + Tổ trưởng + Clear */}
               <div className="flex gap-2">
                 <select
                   value={filterDonVi}
@@ -168,7 +214,7 @@ function AssignWorkerModal({
                 </select>
                 {hasFilters && (
                   <button
-                    onClick={() => { setSearch(''); setFilterDonVi(''); setFilterToTruong(''); }}
+                    onClick={clearFilters}
                     className="px-2 py-1.5 text-xs border border-border rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                     title="Xóa bộ lọc"
                   >
@@ -194,8 +240,9 @@ function AssignWorkerModal({
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Mã NV: <span className="font-mono font-medium">{w.ma_nv || '—'}</span>
                         {w.don_vi && <span className="ml-2 text-blue-600">· {w.don_vi}</span>}
-                        {(w as any).to_truong && <span className="ml-2 text-purple-600">· TT: {(w as any).to_truong}</span>}
+                        {w.to_truong && <span className="ml-2 text-purple-600">· TT: {w.to_truong}</span>}
                         {w.ktx && <span className="ml-2 text-emerald-600">· {w.ktx}</span>}
+                        {w.day && <span className="ml-1 text-emerald-600">{w.day}</span>}
                       </p>
                     </div>
                     <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity font-medium">Chọn →</span>
@@ -228,6 +275,275 @@ function AssignWorkerModal({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Bulk QR Export Modal ─────────────────────────────────────────────────────
+function BulkQRExportModal({ beds, baseUrl, onClose }: {
+  beds: Bed[];
+  baseUrl: string;
+  onClose: () => void;
+}) {
+  const [filterKtx, setFilterKtx] = useState('all');
+  const [filterDay, setFilterDay] = useState('all');
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [progressMsg, setProgressMsg] = useState('');
+
+  const ktxList = Array.from(new Set(beds.map(b => b.ktx).filter(Boolean))).sort();
+  const dayList = Array.from(new Set(
+    beds.filter(b => filterKtx === 'all' || b.ktx === filterKtx).map(b => b.day).filter(Boolean)
+  )).sort();
+
+  const targetBeds = beds.filter(b => {
+    if (filterKtx !== 'all' && b.ktx !== filterKtx) return false;
+    if (filterDay !== 'all' && b.day !== filterDay) return false;
+    return true;
+  });
+
+  const occupiedTarget = targetBeds.filter(b => b.status === 'occupied' && b.ho_va_ten);
+
+  const handleExport = async () => {
+    if (occupiedTarget.length === 0) return;
+    setExporting(true);
+    setProgress(0);
+    setProgressMsg('Đang khởi tạo...');
+
+    try {
+      const zip = new JSZip();
+      const folder = zip.folder('QR-Giuong-KTX') as JSZip;
+
+      // Generate QR label images using canvas
+      const generateQRLabel = async (bed: Bed): Promise<Blob> => {
+        const qrUrl = `${baseUrl}/bed-scan?bed_id=${encodeURIComponent(bed.bed_qr_id)}`;
+        const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}&margin=10&color=1a1a2e&bgcolor=ffffff`;
+
+        // Fetch QR image
+        const qrResp = await fetch(qrApiUrl);
+        const qrBlob = await qrResp.blob();
+        const qrBitmap = await createImageBitmap(qrBlob);
+
+        // Draw label on canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = 400;
+        canvas.height = 520;
+        const ctx = canvas.getContext('2d')!;
+
+        // Background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 400, 520);
+
+        // Border
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(4, 4, 392, 512);
+
+        // Header bar
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(4, 4, 392, 52);
+
+        // Header text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 18px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('KTX HÓC MÔN', 200, 26);
+        ctx.font = '13px Arial, sans-serif';
+        ctx.fillText('Thẻ Định Danh Giường', 200, 46);
+
+        // QR code
+        ctx.drawImage(qrBitmap, 50, 68, 300, 300);
+
+        // Info section
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(4, 374, 392, 138);
+
+        ctx.fillStyle = '#1a1a2e';
+        ctx.textAlign = 'center';
+
+        // Name
+        const name = bed.ho_va_ten || '—';
+        ctx.font = 'bold 20px Arial, sans-serif';
+        // Truncate long names
+        const maxWidth = 360;
+        let displayName = name;
+        while (ctx.measureText(displayName).width > maxWidth && displayName.length > 3) {
+          displayName = displayName.slice(0, -1);
+        }
+        if (displayName !== name) displayName += '...';
+        ctx.fillText(displayName, 200, 402);
+
+        // Mã NV
+        const maNv = bed.pending_status === 'cho_ma'
+          ? `[Chờ mã] ${bed.temp_identifier || ''}`
+          : (bed.ma_nv || '—');
+        ctx.font = '14px Arial, sans-serif';
+        ctx.fillStyle = '#555555';
+        ctx.fillText(`Mã NV: ${maNv}`, 200, 426);
+
+        // Position
+        ctx.font = 'bold 15px Arial, sans-serif';
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillText(`${bed.ktx} · ${bed.day} · Phòng ${bed.phong_so} · Giường ${bed.giuong}`, 200, 452);
+
+        // QR ID small
+        ctx.font = '10px Arial, sans-serif';
+        ctx.fillStyle = '#999999';
+        const qrIdDisplay = bed.bed_qr_id.length > 40 ? bed.bed_qr_id.slice(0, 40) + '...' : bed.bed_qr_id;
+        ctx.fillText(qrIdDisplay, 200, 474);
+
+        // Bottom line
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(4, 484, 392, 32);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '11px Arial, sans-serif';
+        ctx.fillText('Quét mã để điểm danh · Không tháo thẻ này', 200, 504);
+
+        return new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob(blob => {
+            if (blob) resolve(blob);
+            else reject(new Error('Canvas toBlob failed'));
+          }, 'image/png');
+        });
+      };
+
+      const total = occupiedTarget.length;
+      let done = 0;
+
+      // Process in batches of 5 to avoid overwhelming the QR API
+      const BATCH = 5;
+      for (let i = 0; i < total; i += BATCH) {
+        const batch = occupiedTarget.slice(i, i + BATCH);
+        await Promise.all(batch.map(async (bed) => {
+          try {
+            const blob = await generateQRLabel(bed);
+            const safeName = `${bed.ktx}-${bed.day}-P${bed.phong_so}-G${bed.giuong}-${(bed.ho_va_ten || 'unknown').replace(/[^a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF]/g, '_')}`.slice(0, 80);
+            folder.file(`${safeName}.png`, blob);
+          } catch {
+            // Skip failed QR, continue
+          }
+          done++;
+          setProgress(Math.round((done / total) * 100));
+          setProgressMsg(`Đang tạo QR: ${done}/${total}`);
+        }));
+      }
+
+      setProgressMsg('Đang đóng gói ZIP...');
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+      const suffix = filterKtx !== 'all' ? `-${filterKtx}${filterDay !== 'all' ? `-${filterDay}` : ''}` : '-ToanBo';
+      const fileName = `QR-Giuong-KTX${suffix}-${new Date().toLocaleDateString('vi-VN').replace(/\//g, '-')}.zip`;
+
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setProgressMsg(`Hoàn tất! Đã xuất ${done} mã QR.`);
+      setTimeout(() => onClose(), 1500);
+    } catch (err) {
+      setProgressMsg(`Lỗi: ${err instanceof Error ? err.message : 'Không xác định'}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-foreground flex items-center gap-2">
+              <PackageOpen size={16} className="text-primary" />
+              Tải xuống toàn bộ QR
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Xuất mã QR hàng loạt thành file ZIP</p>
+          </div>
+          <button onClick={onClose} disabled={exporting} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground disabled:opacity-50"><X size={18} /></button>
+        </div>
+
+        {/* Filters */}
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Khu KTX</label>
+            <select
+              value={filterKtx}
+              onChange={e => { setFilterKtx(e.target.value); setFilterDay('all'); }}
+              disabled={exporting}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+            >
+              <option value="all">Tất cả KTX</option>
+              {ktxList.map(k => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Dãy</label>
+            <select
+              value={filterDay}
+              onChange={e => setFilterDay(e.target.value)}
+              disabled={exporting || filterKtx === 'all'}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+            >
+              <option value="all">Tất cả dãy</option>
+              {dayList.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Summary */}
+        <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 space-y-1">
+          <p className="text-xs text-blue-700">
+            <strong>{targetBeds.length}</strong> giường trong phạm vi lọc
+            {filterKtx !== 'all' && <span> · {filterKtx}</span>}
+            {filterDay !== 'all' && <span> · {filterDay}</span>}
+          </p>
+          <p className="text-xs text-blue-700">
+            <strong>{occupiedTarget.length}</strong> giường có người ở (sẽ xuất QR)
+          </p>
+        </div>
+
+        {/* QR label spec info */}
+        <div className="p-3 rounded-xl bg-muted/50 border border-border space-y-1">
+          <p className="text-xs font-semibold text-foreground">Thông tin trên nhãn QR:</p>
+          <ul className="text-xs text-muted-foreground space-y-0.5 list-disc list-inside">
+            <li>Họ và Tên công nhân</li>
+            <li>Mã Nhân Viên (Mã NV)</li>
+            <li>Vị trí: Khu · Dãy · Phòng · Giường</li>
+          </ul>
+        </div>
+
+        {/* Progress */}
+        {exporting && (
+          <div className="space-y-2">
+            <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-primary h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-center text-muted-foreground">{progressMsg}</p>
+          </div>
+        )}
+        {!exporting && progressMsg && (
+          <p className="text-xs text-center text-emerald-600 font-medium">{progressMsg}</p>
+        )}
+
+        <div className="flex gap-3">
+          <button onClick={onClose} disabled={exporting} className="flex-1 py-2 border border-border rounded-xl text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors">Hủy</button>
+          <button
+            onClick={handleExport}
+            disabled={exporting || occupiedTarget.length === 0}
+            className="flex-1 flex items-center justify-center gap-2 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            {exporting ? 'Đang xuất...' : `Xuất ${occupiedTarget.length} QR`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -516,27 +832,19 @@ function ExcelImportModal({ onClose, onImport }: {
         const raw: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as unknown[][];
         if (!raw || raw.length < 2) { setParseError('File trống hoặc không đọc được.'); return; }
 
-        // Normalize: uppercase + collapse spaces
         const normalize = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
-
-        // Strip Vietnamese diacritics for fuzzy matching
         const stripDiacritics = (s: string) =>
           s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').replace(/Đ/g, 'D');
-
-        // Combined key: normalized + diacritic-stripped
         const key = (s: string) => stripDiacritics(normalize(s));
 
         const headerRow = (raw[0] as unknown[]).map(c => normalize(String(c)));
         const headerKeys = headerRow.map(h => key(h));
 
-        // Find column index by checking if any alias matches (exact or contains)
         const find = (...names: string[]) => {
           for (const n of names) {
             const nKey = key(n);
-            // Exact match first
             let idx = headerKeys.findIndex(h => h === nKey);
             if (idx >= 0) return idx;
-            // Contains match
             idx = headerKeys.findIndex(h => h.includes(nKey) || nKey.includes(h));
             if (idx >= 0) return idx;
           }
@@ -781,6 +1089,7 @@ export default function BedManagementClient() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAutoAssign, setShowAutoAssign] = useState(false);
+  const [showBulkQR, setShowBulkQR] = useState(false);
   const [assigningBed, setAssigningBed] = useState<Bed | null>(null);
   const [linkingBed, setLinkingBed] = useState<Bed | null>(null);
   const [historyBed, setHistoryBed] = useState<Bed | null>(null);
@@ -854,14 +1163,12 @@ export default function BedManagementClient() {
       assigned_at: r.ma_nv ? now : null,
     }));
 
-    // Insert in batches of 100
     for (let i = 0; i < toInsert.length; i += 100) {
       const batch = toInsert.slice(i, i + 100);
       const { error } = await supabase.from('beds').insert(batch);
       if (error) throw new Error(error.message);
     }
 
-    // Two-way sync: update worker profiles for beds with ma_nv
     const withWorker = rows.filter(r => r.ma_nv);
     for (const r of withWorker) {
       await supabase.from('workers').update({ ktx: r.ktx, day: r.day, phong_so: r.phong_so, giuong: r.giuong, worker_status: 'active' }).eq('ma_nv', r.ma_nv!);
@@ -881,7 +1188,6 @@ export default function BedManagementClient() {
     const performedBy = currentUser?.email || 'admin';
     const now = new Date().toISOString();
 
-    // Get workers without beds
     const { data: unassignedWorkers } = await supabase
       .from('workers')
       .select('id, ho_va_ten, ma_nv, don_vi, worker_status')
@@ -891,15 +1197,13 @@ export default function BedManagementClient() {
 
     if (!unassignedWorkers || unassignedWorkers.length === 0) return;
 
-    // Get empty beds
-    const emptyBeds = beds.filter(b => b.status === 'empty' && (targetKtx === 'all' || b.ktx === targetKtx));
-    if (emptyBeds.length === 0) return;
+    const emptyBedsList = beds.filter(b => b.status === 'empty' && (targetKtx === 'all' || b.ktx === targetKtx));
+    if (emptyBedsList.length === 0) return;
 
-    let bedQueue = [...emptyBeds];
+    let bedQueue = [...emptyBedsList];
     let workerQueue = [...unassignedWorkers];
 
     if (strategy === 'by_unit') {
-      // Group workers by don_vi, assign same unit to same room area
       const byUnit: Record<string, typeof unassignedWorkers> = {};
       for (const w of workerQueue) {
         const unit = (w as any).don_vi || 'Khác';
@@ -914,7 +1218,6 @@ export default function BedManagementClient() {
       assignments.push({ bedId: bedQueue[i].id, worker: workerQueue[i] });
     }
 
-    // Apply assignments
     for (const { bedId, worker } of assignments) {
       const bed = beds.find(b => b.id === bedId);
       if (!bed) continue;
@@ -1008,21 +1311,17 @@ export default function BedManagementClient() {
     const now = new Date().toISOString();
     const performedBy = currentUser?.email || 'admin';
 
-    // Look up worker
     const { data: worker } = await supabase.from('workers').select('id, ho_va_ten, ma_nv').eq('ma_nv', maNv).maybeSingle();
     const workerName = worker?.ho_va_ten || bed.ho_va_ten || maNv;
 
-    // Update bed: replace temp with official ma_nv, clear pending_status
     await supabase.from('beds').update({
       ma_nv: maNv, ho_va_ten: workerName, pending_status: null, temp_identifier: null,
     }).eq('id', bed.id);
 
-    // Update attendance records that used the temp ID
     if (bed.ma_nv && bed.ma_nv !== maNv) {
       await supabase.from('attendance_records').update({ ma_nv: maNv, ho_va_ten: workerName }).eq('ma_nv', bed.ma_nv);
     }
 
-    // Update worker profile
     if (worker) {
       await supabase.from('workers').update({ ktx: bed.ktx, day: bed.day, phong_so: bed.phong_so, giuong: bed.giuong, worker_status: 'active' }).eq('ma_nv', maNv);
     }
@@ -1167,6 +1466,12 @@ export default function BedManagementClient() {
             className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors text-muted-foreground">
             <Download size={14} /> Xuất Excel
           </button>
+          <button
+            onClick={() => setShowBulkQR(true)}
+            className="flex items-center gap-1.5 px-3 py-2 border border-violet-300 bg-violet-50 text-violet-700 rounded-lg text-sm hover:bg-violet-100 transition-colors font-medium"
+          >
+            <PackageOpen size={14} /> Tải xuống toàn bộ QR
+          </button>
           <button onClick={() => setShowImportModal(true)}
             className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors text-muted-foreground">
             <Upload size={14} /> Nhập Excel
@@ -1278,6 +1583,7 @@ export default function BedManagementClient() {
       {showAddModal && <AddBedModal onClose={() => setShowAddModal(false)} onAdd={handleAddBed} ktxList={ktxList.length > 0 ? ktxList : ['KTX 1', 'KTX 2']} />}
       {showImportModal && <ExcelImportModal onClose={() => setShowImportModal(false)} onImport={handleBulkImport} />}
       {showAutoAssign && <AutoAssignModal beds={beds} onClose={() => setShowAutoAssign(false)} onAutoAssign={handleAutoAssign} />}
+      {showBulkQR && baseUrl && <BulkQRExportModal beds={beds} baseUrl={baseUrl} onClose={() => setShowBulkQR(false)} />}
       {assigningBed && <AssignWorkerModal bed={assigningBed} onClose={() => setAssigningBed(null)} onAssign={handleAssignWorker} onAssignPending={handleAssignPending} />}
       {linkingBed && <LinkMaNvModal bed={linkingBed} onClose={() => setLinkingBed(null)} onLink={handleLinkMaNv} />}
       {historyBed && <BedHistoryModal bed={historyBed} onClose={() => setHistoryBed(null)} />}
